@@ -1,0 +1,1919 @@
+# api/main.py
+import io
+import os
+from typing import Optional, List, Dict, Any, Literal
+import httpx
+import numpy as np
+import pandas as pd
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+from fastapi import FastAPI, UploadFile, File, Form, Header,APIRouter, HTTPException, Depends, Query, Body
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from supabase import create_client, Client
+from openai import OpenAI
+from dotenv import load_dotenv
+from urllib.parse import quote
+from pydantic import BaseModel, field_validator
+import re
+
+load_dotenv()
+
+from utils import unify_columns, normalize_vendor, apply_rules, load_spreadsheet
+
+
+# === ENV ===
+SUPABASE_URL = os.environ.get('SUPABASE_URL')
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
+SUPABASE_ANON_KEY = os.environ.get('SUPABASE_ANON_KEY')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+ALLOWED_ORIGINS = [o.strip() for o in os.environ.get('ALLOWED_ORIGINS', '*').split(',') if o.strip()]
+DEV_USER_ID = os.environ.get('DEV_USER_ID')
+
+if not all([SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY]):
+    raise RuntimeError('환경변수(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY)가 필요합니다.')
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS or ['*'],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# === Helper ===
+def build_download_headers(filename: str) -> dict:
+    ascii_fallback = "download.xlsx"
+    if all(ord(c) < 128 for c in filename):
+        ascii_fallback = filename
+    return {
+        "Content-Disposition": f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(filename)}"
+    }
+
+# === Auth ===
+async def get_user_id(authorization: Optional[str]) -> str:
+    if authorization and authorization.lower().startswith('bearer '):
+        token = authorization.split(' ', 1)[1]
+        url = f"{SUPABASE_URL}/auth/v1/user"
+        headers = {'Authorization': f'Bearer {token}', 'apikey': SUPABASE_ANON_KEY}
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers=headers)
+            if r.status_code != 200:
+                raise HTTPException(status_code=401, detail='Invalid token')
+            return r.json()['id']
+    if DEV_USER_ID:
+        return DEV_USER_ID
+    raise HTTPException(status_code=401, detail='Missing Authorization Bearer token')
+
+async def get_role(user_id: str) -> str:
+    try:
+        res = supabase.table('profiles').select('id, role').eq('id', user_id).execute()
+        print(f"🧩 [get_role] user_id={user_id} → res.data={res.data}")
+
+        if res.data and res.data[0].get('role'):
+            return res.data[0]['role']
+    except Exception as e:
+        print(f"⚠️ [get_role 오류]: {e}")
+
+    return 'viewer'  # ❗ 기본값은 viewer로 두되, 로그로 확인
+
+# === Models ===
+class ReportFilter(BaseModel):
+    year: int
+    month: int
+    branch: Optional[str] = None
+    category: Optional[str] = None
+    granularity: Literal['day','week','month','year'] = 'month'
+
+class AssignPayload(BaseModel):
+    transaction_ids: List[str]
+    category: str
+    category_l1: Optional[str] = None
+    category_l2: Optional[str] = None
+    category_l3: Optional[str] = None
+    is_fixed: bool = False
+    save_rule: bool = False
+    rule_keyword_source: Literal['vendor','description','memo','any'] = 'any'
+
+class CategoryCreate(BaseModel):
+    l1: str
+    l2: Optional[str] = None
+    l3: Optional[str] = None
+    is_fixed: bool = False
+
+class SalonKPIInput(BaseModel):
+    total_sales: float
+    pass_paid_total: float
+    realized_from_pass: float
+    pass_balance: float
+    pay_sales: float
+    card_sales: float
+    visitors_total: int
+    fixed_expense: float
+    variable_expense: float
+    interns: int
+
+    # ✅ 추가 필드 — 선택적(optional)로 변경
+    monthly_income: Optional[Dict[str, float]] = None
+    monthly_fixed: Optional[Dict[str, float]] = None
+    monthly_variable: Optional[Dict[str, float]] = None
+
+
+
+# === Routes ===
+@app.get('/health')
+async def health():
+    return {"status": "ok"}
+
+@app.get('/meta/branches')
+async def meta_branches(authorization: Optional[str] = Header(None)):
+    user_id = await get_user_id(authorization)
+    names = set()
+
+    try:
+        # ① branches 테이블
+        res1 = supabase.table('branches').select('name').eq('user_id', user_id).execute()
+        for r in res1.data or []:
+            if r.get('name'):
+                names.add(r['name'])
+    except Exception as e:
+        print("⚠️ branches 조회 오류:", e)
+
+    try:
+        # ② transactions 테이블
+        res2 = supabase.table('transactions').select('branch').eq('user_id', user_id).neq('branch', '').execute()
+        for r in res2.data or []:
+            if r.get('branch'):
+                names.add(r['branch'])
+    except Exception as e:
+        print("⚠️ transactions 조회 오류:", e)
+
+    return sorted(list(names))
+@app.get('/me')
+async def me(authorization: Optional[str] = Header(None)):
+    user_id = await get_user_id(authorization)
+    print(f"🔍 /me 요청 — authorization header: {authorization}")
+    print(f"🔍 /me 요청 — 해석된 user_id: {user_id}")
+    role = await get_role(user_id)
+    print(f"🔍 /me 요청 — get_role 반환값: {role}")
+    return {"user_id": user_id, "role": role}
+
+# === Upload ===
+@app.post('/upload')
+async def upload_file(
+    file: UploadFile = File(...),
+    branch: str = Form(...),
+    period_year: int = Form(...),
+    period_month: int = Form(...),
+    authorization: Optional[str] = Header(None)
+):
+    user_id = await get_user_id(authorization)
+    content = await file.read()
+
+    # 0️⃣ 새 지점 자동 등록
+    try:
+        existing = (
+            supabase.table('branches')
+            .select('id')
+            .eq('user_id', user_id)
+            .eq('name', branch)
+            .limit(1)
+            .execute()
+        )
+        if not existing.data:
+            supabase.table('branches').upsert(
+                {'user_id': user_id, 'name': branch},
+                on_conflict='user_id,name'
+            ).execute()
+    except Exception as e:
+        print(f"⚠️ branches 자동등록 중 오류: {e}")
+
+    # 1️⃣ Load spreadsheet
+    try:
+        df_raw = load_spreadsheet(content, file.filename)
+        df = unify_columns(df_raw)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"파일 읽기 오류: {e}")
+
+    df = df.replace([np.nan, np.inf, -np.inf], None)
+    if 'memo' not in df.columns:
+        df['memo'] = ''
+    else:
+        df['memo'] = df['memo'].fillna('')
+
+    df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0.0)
+    df = df[df['date'].notna()].copy()
+
+    # 2️⃣ 규칙 적용
+    df['vendor_normalized'] = df['description'].apply(normalize_vendor)
+    rules = supabase.table('rules').select('*').eq('user_id', user_id).eq('is_active', True)\
+        .order('priority', desc=True).execute().data or []
+    applied = [apply_rules(row.to_dict(), rules) for _, row in df.iterrows()]
+    df = pd.concat([df, pd.DataFrame(applied)], axis=1)
+
+    # 3️⃣ Upload log 기록
+    up = supabase.table('uploads').insert({
+        'user_id': user_id,
+        'branch': branch,
+        'period_year': period_year,
+        'period_month': period_month,
+        'original_filename': file.filename,
+        'total_rows': len(df),
+        'status': 'processed'
+    }).execute()
+    upload_id = up.data[0]['id']
+
+    # 4️⃣ 거래내역 저장
+    recs = []
+    for _, r in df.iterrows():
+        recs.append({
+            'user_id': user_id,
+            'upload_id': upload_id,
+            'branch': branch,
+            'tx_date': str(r['date']),
+            'description': (r.get('description') or ''),
+            'memo': (r.get('memo') or ''),
+            'amount': float(r.get('amount', 0) or 0),
+            'balance': float(r.get('balance', 0) or 0),
+            'category': (r.get('category') or '미분류'),
+            'vendor_normalized': r.get('vendor_normalized'),
+            'is_fixed': bool(r.get('is_fixed', False))
+        })
+    for i in range(0, len(recs), 500):
+        supabase.table('transactions').insert(recs[i:i+500]).execute()
+
+    # ✅ [자산 자동등록] ==============================
+    try:
+        if 'balance' not in df.columns or df.empty:
+            print("⚠️ balance 컬럼이 없거나 데이터가 비어 있음 → 자산 자동등록 건너뜀")
+        else:
+            df['month'] = pd.to_datetime(df['date']).dt.to_period('M')
+
+            # ✅ 각 월별 마지막 날짜의 잔액 직접 추출
+            for _, group in df.groupby('month', as_index=False):
+                last_row = group.sort_values('date').iloc[-1]
+                last_balance = float(last_row['balance'] or 0)
+                y, m = map(int, str(last_row['month']).split('-'))
+
+                # ✅ 이번 달 데이터가 이미 있으면 삭제 (중복 방지)
+                memo_pattern = f'{y}년 {m}월 말 잔액 기준 자동등록'
+                supabase.table('assets_log') \
+                    .delete() \
+                    .eq('user_id', user_id) \
+                    .eq('branch', branch) \
+                    .ilike('memo', f'%{memo_pattern}%') \
+                    .execute()
+
+                # ✅ 다음 달 1일 기준으로 created_at 지정
+                if m == 12:
+                    next_y, next_m = y + 1, 1
+                else:
+                    next_y, next_m = y, m + 1
+                created_at = datetime(next_y, next_m, 1, 0, 0, 0)
+
+                supabase.table('assets_log').insert({
+                    'user_id': user_id,
+                    'branch': branch,
+                    'type': '수입',
+                    'direction': '증가',
+                    'category': f'{branch} 사업자통장',
+                    'amount': last_balance,
+                    'memo': memo_pattern,
+                    'created_at': created_at.isoformat()
+                }).execute()
+
+                print(f"✅ [{branch}] {y}년 {m}월 자동등록 완료 → {last_balance}")
+
+    except Exception as e:
+        print(f"⚠️ 자산 자동등록 중 오류 발생: {e}")
+
+    # 6️⃣ Excel 반환
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='transactions')
+    out.seek(0)
+
+    headers = build_download_headers(f"processed_{period_year}-{period_month:02d}_{branch}.xlsx")
+    return Response(content=out.read(),
+                    media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    headers=headers)
+
+@app.get("/designer_salaries")
+async def list_designer_salaries(
+    branch: str = Query(...),
+    start_month: str = Query(...),
+    end_month: str = Query(...),
+    authorization: Optional[str] = Header(None)
+):
+    user_id = await get_user_id(authorization)
+    try:
+        data = (
+            supabase.table("designer_salaries")
+            .select("name, rank, month, base_amount, extra_amount, total_amount, amount")
+            .eq("user_id", user_id)
+            .eq("branch", branch)
+            .gte("month", start_month)
+            .lte("month", end_month)
+            .order("month", desc=False)
+            .order("name", desc=False)
+            .execute()
+            .data
+        )
+        return data or []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"조회 실패: {e}")
+
+# @app.post('/upload')
+# async def upload_file(
+#     file: UploadFile = File(...),
+#     branch: str = Form(...),
+#     period_year: int = Form(...),
+#     period_month: int = Form(...),
+#     authorization: Optional[str] = Header(None)
+# ):
+#     user_id = await get_user_id(authorization)
+#     content = await file.read()
+
+#     # 0️⃣ 새 지점 자동 등록 (branches 테이블)
+#     try:
+#         if not user_id:
+#             raise ValueError("user_id가 누락되어 branches에 NULL로 들어갈 수 있습니다.")
+
+#         existing = (
+#             supabase.table('branches')
+#             .select('id')
+#             .eq('user_id', user_id)
+#             .eq('name', branch)
+#             .limit(1)
+#             .execute()
+#         )
+
+#         if not existing.data:
+#             print(f"🆕 새 지점 자동 등록: {branch}")
+#             supabase.table('branches').upsert(
+#                 {'user_id': user_id, 'name': branch},
+#                 on_conflict='user_id,name'
+#             ).execute()
+#     except Exception as e:
+#         print(f"⚠️ branches 자동등록 중 오류: {e}")
+
+#     # 1️⃣ Load
+#     try:
+#         df_raw = load_spreadsheet(content, file.filename)
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=f"파일 읽기 오류: {e}")
+
+#     # 2️⃣ Normalize
+#     try:
+#         df = unify_columns(df_raw)
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=f"컬럼 정규화 오류: {e}")
+
+#     # ✅ NaN/inf 정리 (JSON 오류 방지)
+#     df = df.replace([np.nan, np.inf, -np.inf], None)
+
+#     # ✅ memo 안전 처리
+#     if 'memo' not in df.columns:
+#         df['memo'] = ''
+#     else:
+#         df['memo'] = df['memo'].fillna('')
+#     df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0.0)
+#     df = df[df['date'].notna()].copy()
+
+#     # 3️⃣ Vendor normalize + 기존 rules 적용
+#     df['vendor_normalized'] = df['description'].apply(normalize_vendor)
+#     rules = supabase.table('rules').select('*').eq('user_id', user_id).eq('is_active', True)\
+#         .order('priority', desc=True).execute().data or []
+#     applied = [apply_rules(row.to_dict(), rules) for _, row in df.iterrows()]
+#     df = pd.concat([df, pd.DataFrame(applied)], axis=1)
+
+#     # 4️⃣ 자동 규칙 학습 (기존 거래 기반: 카테고리 + 고정지출)
+#     existing = supabase.table('transactions').select(
+#         'vendor_normalized,description,category,is_fixed'
+#     ).eq('user_id', user_id).neq('category', '미분류').execute().data or []
+
+#     auto_map = {}
+#     for row in existing:
+#         key = (row.get('vendor_normalized') or row.get('description'))
+#         if key:
+#             auto_map[key.strip()] = {
+#                 "category": row.get('category'),
+#                 "is_fixed": bool(row.get('is_fixed', False))
+#             }
+
+#     # ✅ 5️⃣ 자동 분류 + 고정/변동 자동 반영
+#     df['is_fixed'] = False  # 기본값: 변동지출
+#     for i, r in df.iterrows():
+#         key = (r.get('vendor_normalized') or r.get('description'))
+#         if not key:
+#             continue
+
+#         match = auto_map.get(key.strip())
+#         if match:
+#             if not r.get('category') or r['category'] == '미분류':
+#                 df.at[i, 'category'] = match.get('category', '미분류')
+#             df.at[i, 'is_fixed'] = match.get('is_fixed', False)
+
+#     # 6️⃣ Upload log
+#     up = supabase.table('uploads').insert({
+#         'user_id': user_id,
+#         'branch': branch,
+#         'period_year': period_year,
+#         'period_month': period_month,
+#         'original_filename': file.filename,
+#         'total_rows': len(df),
+#         'unclassified_rows': int(((df['category'].isna()) | (df['category'] == '미분류')).sum()),
+#         'status': 'processed'
+#     }).execute()
+#     upload_id = up.data[0]['id']
+
+#     # 7️⃣ Save transactions
+#     recs = []
+#     for _, r in df.iterrows():
+#         amt = float(r.get('amount', 0) or 0)
+#         bal = float(r.get('balance', 0) or 0)  # ✅ 잔액 컬럼 추가
+
+#         recs.append({
+#             'user_id': user_id,
+#             'upload_id': upload_id,
+#             'branch': branch,
+#             'tx_date': str(r['date']) if r['date'] else None,
+#             'description': (r.get('description') or ''),
+#             'memo': (r.get('memo') or ''),
+#             'amount': amt,
+#             'balance': bal,                     # ✅ 추가됨
+#             'category': (r.get('category') or '미분류'),
+#             'vendor_normalized': r.get('vendor_normalized'),
+#             'is_fixed': bool(r.get('is_fixed', False))
+#         })
+
+#     # ✅ Supabase에 저장
+#     for i in range(0, len(recs), 500):
+#         supabase.table('transactions').insert(recs[i:i + 500]).execute()
+
+#     # ✅ [자산 자동등록] ==============================
+#     try:
+#         delete_after = datetime(period_year, period_month, 1) + relativedelta(months=1)
+#         supabase.table('assets_log') \
+#             .delete() \
+#             .eq('user_id', user_id) \
+#             .eq('branch', branch) \
+#             .ilike('memo', '%자동등록%') \
+#             .gte('created_at', delete_after.isoformat()) \
+#             .execute()
+        
+#         print("📊 df.columns:", df.columns.tolist())
+#         print("📈 balance 샘플:", df['balance'].head().tolist() if 'balance' in df.columns else '없음')
+#         print("📅 df.shape:", df.shape)
+#         print("🔍 branch:", branch, "user_id:", user_id)
+
+#         if 'balance' in df.columns and not df.empty:
+#             df['month'] = pd.to_datetime(df['date']).dt.to_period('M')
+
+#             # ✅ 각 월별 마지막 날짜의 잔액 직접 추출
+#             month_groups = df.groupby('month', as_index=False)
+#             for _, group in month_groups:
+#                 last_row = group.sort_values('date').iloc[-1]
+#                 month_str = str(last_row['month'])
+#                 last_balance = float(last_row['balance'] or 0)
+#                 year, month = map(int, month_str.split('-'))
+
+#                 # ✅ 다음 달 1일로 created_at 설정 (이월 기준)
+#                 if month == 12:
+#                     next_year, next_month = year + 1, 1
+#                 else:
+#                     next_year, next_month = year, month + 1
+
+#                 created_at = datetime(next_year, next_month, 1, 0, 0, 0)
+
+#                 # ✅ 실제 DB 저장 (여기서만 insert!)
+#                 supabase.table('assets_log').insert({
+#                     'user_id': user_id,
+#                     'branch': branch or '미지정',
+#                     'type': '수입',
+#                     'direction': '증가',
+#                     'category': f'{branch} 사업자통장',
+#                     'amount': last_balance,
+#                     'memo': f'{year}년 {month}월 말 잔액 기준 자동등록',
+#                     'created_at': created_at.isoformat()
+#                 }).execute()
+
+#                 print(f"✅ {branch} {year}년 {month}월 → {next_year}-{next_month:02d}월 시작 잔액 {last_balance}")
+
+#         else:
+#             print("⚠️ balance 컬럼이 없거나 데이터가 비어 있음 → 자산 자동등록 건너뜀")
+
+#     except Exception as e:
+#         print(f"⚠️ 자산 자동등록 중 오류 발생: {e}")
+#     # 8️⃣ Generate Excel
+#     out = io.BytesIO()
+#     with pd.ExcelWriter(out, engine='openpyxl') as writer:
+#         df_out = df.copy()
+#         df_out.rename(columns={
+#             'date': '날짜', 'description': '내용', 'memo': '메모',
+#             'amount': '금액', 'category': '카테고리', 'is_fixed': '고정지출여부'
+#         }, inplace=True)
+#         df_out.to_excel(writer, index=False, sheet_name='transactions')
+#         summary = df_out.groupby(['카테고리'], dropna=False)['금액']\
+#             .agg(['count', 'sum']).reset_index()
+#         summary.to_excel(writer, index=False, sheet_name='summary')
+#     out.seek(0)
+
+#     safe_name = f"processed_{period_year}-{period_month:02d}_{branch}.xlsx"
+#     headers = build_download_headers(safe_name)
+
+#     return Response(
+#         content=out.read(),
+#         media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+#         headers=headers
+#     )
+class ManualSalaryItem(BaseModel):
+    branch: str
+    name: str
+    rank: str
+    month: str            # 'YYYY-MM'
+    base_amount: float
+    extra_amount: Optional[float] = 0.0
+    total_amount: float
+
+    @field_validator("month")
+    @classmethod
+    def _validate_month(cls, v: str) -> str:
+        if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", v or ""):
+            raise ValueError("month must be in 'YYYY-MM' format")
+        return v
+
+@app.post("/transactions/salary_manual_save")
+async def salary_manual_save(
+    items: List[ManualSalaryItem],
+    authorization: Optional[str] = Header(None)
+):
+    """
+    프론트의 '직접 입력형' 급여 저장 엔드포인트.
+    - payload: ManualSalaryItem[] (branch, name, rank, month, base_amount, extra_amount, total_amount)
+    - 작업:
+        1) 각 항목에 대해 (user_id, branch, name, month) 중복 제거
+        2) designer_salaries에 insert (amount=total_amount도 함께 채움)
+    """
+    user_id = await get_user_id(authorization)
+    if not items:
+        return {"ok": True, "inserted": 0}
+
+    # 유효성/정규화
+    cleaned: List[dict] = []
+    for it in items:
+        # 금액 음수 방지 및 None 안전화
+        base = float(it.base_amount or 0)
+        extra = float(it.extra_amount or 0)
+        total = float(it.total_amount or (base + extra))
+
+        cleaned.append({
+            "user_id": user_id,
+            "branch": (it.branch or "").strip(),
+            "name": (it.name or "").strip(),
+            "rank": (it.rank or "").strip(),
+            "month": it.month,                 # 'YYYY-MM'
+            "base_amount": base,
+            "extra_amount": extra,
+            "total_amount": total,
+            "amount": total,                   # 기존 amount 컬럼도 동일 값으로 기록
+            "tx_ids": [],                      # 수동 입력이므로 비움
+        })
+
+    # (유니크 보장) 같은 (user_id, branch, name, month) 기존 레코드 제거 후 삽입
+    # - 유니크 인덱스를 걸어두었으면 upsert로 대체 가능
+    inserted = 0
+    try:
+        # 1) 먼저 같은 키 조합을 한 번에 지워 중복 방지
+        #    (Supabase의 delete IN 절은 or_.in_ 형태 없이 loop로 처리)
+        for row in cleaned:
+            supabase.table("designer_salaries") \
+                .delete() \
+                .eq("user_id", user_id) \
+                .eq("branch", row["branch"]) \
+                .eq("name", row["name"]) \
+                .eq("month", row["month"]) \
+                .execute()
+
+        # 2) 벌크 인서트 (500개씩 청크)
+        for i in range(0, len(cleaned), 500):
+            chunk = cleaned[i:i+500]
+            res = supabase.table("designer_salaries").insert(chunk).execute()
+            inserted += len(res.data or [])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"급여 저장 중 오류: {e}")
+
+    return {"ok": True, "inserted": inserted}
+
+@app.post("/transactions/salary_manual_delete")
+async def salary_manual_delete(payload: dict, authorization: Optional[str] = Header(None)):
+    user_id = await get_user_id(authorization)
+    branch = payload.get("branch")
+    name = payload.get("name")
+    month = payload.get("month")
+
+    # print("🧾 [DELETE 요청 수신]", {"user_id": user_id, "branch": branch, "name": name, "month": month})
+
+    if not (branch and name and month):
+        raise HTTPException(status_code=400, detail="필수 필드 누락")
+
+    try:
+        res = (
+            supabase.table("designer_salaries")
+            .delete()
+            .eq("user_id", user_id)
+            .eq("branch", branch)
+            .eq("name", name)
+            .eq("month", month)
+            .execute()
+        )
+
+        print("🧹 [Supabase 삭제 결과]", res)
+
+        if getattr(res, "error", None):
+            raise HTTPException(status_code=500, detail=f"삭제 실패: {res.error}")
+
+        return {"success": True, "deleted": len(getattr(res, "data", []) or [])}
+    except Exception as e:
+        print("❌ [salary_manual_delete 오류]", e)
+        raise HTTPException(status_code=500, detail=f"삭제 중 오류: {e}")
+# (선택) 월 범위 조회 API — 프론트에서 한 화면에 보여줄 때 유용
+@app.get("/designer_salaries")
+async def list_designer_salaries(
+    branch: str = Query(...),
+    start_month: str = Query(..., description="YYYY-MM"),
+    end_month: str = Query(..., description="YYYY-MM"),
+    authorization: Optional[str] = Header(None)
+):
+    """
+    지점 + 월 범위를 기준으로 디자이너 급여 전부 조회
+    - 반환: name, rank, month, base_amount, extra_amount, total_amount, amount
+    """
+    user_id = await get_user_id(authorization)
+
+    try:
+        q = (
+            supabase.table("designer_salaries")
+            .select("name, rank, month, base_amount, extra_amount, total_amount, amount")
+            .eq("user_id", user_id)
+            .eq("branch", branch)
+            .gte("month", start_month)
+            .lte("month", end_month)
+            .order("month", desc=False)
+            .order("name", desc=False)
+        )
+        data = q.execute().data or []
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"조회 실패: {e}")
+    
+# === 업로드 내역 조회 (실시간 미분류 건수 포함) ===
+@app.get('/uploads')
+async def list_uploads(
+    limit: int = 50, offset: int = 0,
+    branch: Optional[str] = None,
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    authorization: Optional[str] = Header(None)
+):
+    user_id = await get_user_id(authorization)
+    print("✅ [DEBUG] user_id =", user_id)
+
+    # 1️⃣ 업로드 목록 조회
+    q = supabase.table('uploads').select('*').eq('user_id', user_id)
+    if branch:
+        q = q.eq('branch', branch)
+    if year:
+        q = q.eq('period_year', year)
+    if month:
+        q = q.eq('period_month', month)
+    q = q.order('created_at', desc=True).range(offset, offset + limit - 1)
+    uploads = q.execute().data or []
+
+    # 2️⃣ 각 업로드별 실시간 미분류 개수 계산
+    for u in uploads:
+        try:
+            tx_data = supabase.table('transactions') \
+                .select('id', count='exact') \
+                .eq('upload_id', u['id']) \
+                .eq('user_id', user_id) \
+                .eq('category', '미분류') \
+                .execute()
+            u['unclassified_rows'] = tx_data.count or 0
+        except Exception as e:
+            print(f"⚠️ 미분류 건수 계산 중 오류 (upload_id={u['id']}):", e)
+            u['unclassified_rows'] = u.get('unclassified_rows', 0) or 0
+
+    # 3️⃣ 프론트가 기대하는 응답 구조로 반환
+    return {
+        "items": uploads,
+        "count": len(uploads),
+        "limit": limit,
+        "offset": offset
+    }
+
+@app.post("/transactions/mark_fixed")
+async def mark_fixed(data: dict):
+    tx_id = data.get("transaction_id")
+    is_fixed = data.get("is_fixed")
+    if not tx_id:
+        raise HTTPException(status_code=400, detail="transaction_id required")
+    supabase.table("transactions").update({"is_fixed": is_fixed}).eq("id", tx_id).execute()
+    return {"success": True, "id": tx_id, "is_fixed": is_fixed}
+
+# ✅ 업로드 삭제 API
+@app.delete("/uploads/{upload_id}")
+async def delete_upload(upload_id: str):
+    # 업로드 존재 확인
+    upload = supabase.table("uploads").select("id").eq("id", upload_id).execute()
+    if not upload.data:
+        raise HTTPException(status_code=404, detail="Upload not found")
+
+    # 해당 업로드에 연결된 거래 삭제
+    supabase.table("transactions").delete().eq("upload_id", upload_id).execute()
+
+    # 업로드 메타데이터 삭제
+    supabase.table("uploads").delete().eq("id", upload_id).execute()
+
+    return {"message": "Upload deleted successfully", "id": upload_id}
+@app.get('/meta/category-suggestions')
+async def category_suggestions(authorization: Optional[str] = Header(None)):
+    user_id = await get_user_id(authorization)
+    rows = supabase.table('transactions')\
+        .select('category')\
+        .eq('user_id', user_id).neq('category','미분류').execute().data or []
+    freq = {}
+    for r in rows:
+        c = (r.get('category') or '').strip()
+        if c:
+            freq[c] = freq.get(c, 0) + 1
+    # 상위 50
+    ordered = sorted(freq.items(), key=lambda x: x[1], reverse=True)[:50]
+    return [name for name, _ in ordered]
+@app.get('/rules')
+async def list_rules(authorization: Optional[str] = Header(None)):
+    user_id = await get_user_id(authorization)
+    res = supabase.table('rules').select('id,keyword,target,category,is_fixed,priority')\
+        .eq('user_id', user_id).eq('is_active', True).order('priority', desc=True).execute()
+    return res.data or []
+class RuleCreate(BaseModel):
+    keyword: str
+    target: Literal['vendor','description','memo','any'] = 'any'
+    category: str
+    is_fixed: bool = False
+    priority: int = 100
+
+@app.post('/rules')
+async def create_rule(payload: RuleCreate, authorization: Optional[str] = Header(None)):
+    user_id = await get_user_id(authorization)
+    kw = (payload.keyword or '').strip()
+    if not kw:
+        raise HTTPException(status_code=400, detail='keyword required')
+    supabase.table('rules').insert({
+        'user_id': user_id,
+        'keyword': kw,
+        'target': payload.target,
+        'category': payload.category or '미분류',
+        'is_active': True,
+        'is_fixed': payload.is_fixed,
+        'priority': payload.priority,
+    }).execute()
+    return {'ok': True}
+# === 거래 목록 조회 (미분류 + 분류 완료 포함) ===
+@app.get("/transactions/manage")
+async def list_transactions(
+    limit: int = 1000,
+    offset: int = 0,
+    branch: Optional[str] = None,
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    authorization: Optional[str] = Header(None)
+):
+    """전체 거래 관리 (미분류 + 분류 완료 포함)"""
+    user_id = await get_user_id(authorization)
+
+    q = supabase.table("transactions").select("*").eq("user_id", user_id)
+
+    # ✅ 지점 필터 (공백/대소문자 무시)
+    if branch:
+        q = q.ilike("branch", branch.strip())
+
+    # ✅ 기간 필터 (연/월이 없으면 전체 반환)
+    if year and month:
+        start = f"{year}-{month:02d}-01"
+        if month == 12:
+            end = f"{year + 1}-01-01"
+        else:
+            end = f"{year}-{month + 1:02d}-01"
+        q = q.gte("tx_date", start).lt("tx_date", end)
+    elif year:
+        q = q.gte("tx_date", f"{year}-01-01").lt("tx_date", f"{year + 1}-01-01")
+
+    q = q.order("tx_date", desc=True).range(offset, offset + limit - 1)
+    data = q.execute().data or []
+
+    # ✅ null-safe 처리
+    for row in data:
+        row["memo"] = row.get("memo", "") or ""
+        row["category"] = row.get("category", "") or ""
+        row["branch"] = row.get("branch", "") or ""
+
+    return {
+        "items": data,
+        "count": len(data),
+        "limit": limit,
+        "offset": offset,
+    }
+
+# # === 거래 카테고리 / 메모 지정 ===
+# @app.post('/transactions/assign')
+# async def assign_category(
+#     body: dict,
+#     authorization: Optional[str] = Header(None)
+# ):
+#     """
+#     {
+#         "transaction_ids": ["uuid1", "uuid2", ...],
+#         "category": "식비",
+#         "memo": "점심 회식",
+#         "save_rule": false
+#     }
+#     """
+#     user_id = await get_user_id(authorization)
+#     if not user_id:
+#         raise HTTPException(status_code=401, detail="Unauthorized")
+
+#     tx_ids = body.get("transaction_ids", [])
+#     category = body.get("category")
+#     memo = body.get("memo", "")
+#     save_rule = body.get("save_rule", False)
+
+#     if not tx_ids or not category:
+#         raise HTTPException(status_code=400, detail="transaction_ids와 category는 필수입니다.")
+
+#     # ✅ 카테고리 + 메모 업데이트
+#     updates = {
+#         "category": category,
+#         "memo": memo,
+#     }
+
+#     # ✅ memo 기본값 보장
+#     for row in data:
+#         row['memo'] = row.get('memo', '') or ''
+#         row['category'] = row.get('category', '') or ''
+        
+#     # ✅ Supabase bulk update
+#     for tx_id in tx_ids:
+#         supabase.table("transactions").update(updates).eq("id", tx_id).eq("user_id", user_id).execute()
+
+#     # ✅ 선택적으로 규칙 저장
+#     if save_rule:
+#         supabase.table("rules").upsert({
+#             "user_id": user_id,
+#             "keyword": category,
+#             "target": "description",
+#             "category": category,
+#             "is_active": True
+#         }, on_conflict="user_id,keyword").execute()
+
+#     return {"status": "ok", "updated": len(tx_ids)}
+
+# === 자산 변동 로그 ===
+@app.get("/assets_log")
+async def get_assets_log(
+    branch: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None)
+):
+    """부동자산(수동 등록) 로그 조회"""
+    user_id = await get_user_id(authorization)
+
+    query = supabase.table("assets_log").select("*").eq("user_id", user_id)
+    if branch:
+        query = query.eq("branch", branch)
+    res = query.order("created_at", desc=True).execute()
+
+    return {"items": res.data}
+
+
+@app.post("/assets_log")
+async def add_asset_log(
+    payload: dict,
+    authorization: Optional[str] = Header(None)
+):
+    """자산 로그 추가 (부동자산 수동 등록 포함)"""
+    user_id = await get_user_id(authorization)
+
+    supabase.table("assets_log").insert({
+        "user_id": user_id,
+        "type": payload.get("type"),
+        "direction": payload.get("direction"),
+        "category": payload.get("category"),
+        "amount": payload.get("amount"),
+        "memo": payload.get("memo", ""),
+        "branch": payload.get("branch", None)  # ✅ 지점명 저장
+    }).execute()
+
+    return {"ok": True}
+
+
+# === 자산 삭제 로그 ===
+@app.delete("/assets_log/{id}")
+async def delete_asset_log(
+    id: str,
+    authorization: Optional[str] = Header(None)
+):
+    """자산 로그 삭제"""
+    user_id = await get_user_id(authorization)
+    supabase.table("assets_log").delete().eq("id", id).eq("user_id", user_id).execute()
+    return {"ok": True}
+
+
+# === 유동자산 자동등록 로그 조회 ===
+@app.get("/assets_log/liquid")
+async def get_liquid_assets(
+    authorization: Optional[str] = Header(None),
+    branch: Optional[str] = Query(None)
+):
+    user_id = await get_user_id(authorization)
+
+    query = (
+        supabase.table("assets_log")
+        .select("*")
+        .eq("user_id", user_id)
+        .ilike("memo", "%자동등록%")
+    )
+
+    # ✅ 지점 필터 추가
+    if branch:
+        query = query.eq("branch", branch)
+
+    res = query.order("created_at", desc=True).execute()
+    return {"items": res.data}
+
+# === 규칙/카테고리 ===
+@app.post("/transactions/assign")
+async def assign_categories(
+    payload: AssignPayload,
+    authorization: Optional[str] = Header(None)
+):
+    user_id = await get_user_id(authorization)
+    if not payload.transaction_ids:
+        return {"ok": True, "updated": 0}
+
+    update_fields = {
+        "category": payload.category or "미분류",
+        "category_l1": payload.category_l1,
+        "category_l2": payload.category_l2,
+        "category_l3": payload.category_l3,
+        "is_fixed": payload.is_fixed,
+    }
+
+    # ✅ memo 필드가 payload에 있으면 업데이트 포함
+    if hasattr(payload, "memo"):
+        update_fields["memo"] = getattr(payload, "memo") or ""
+
+    for tid in payload.transaction_ids:
+        supabase.table("transactions").update(update_fields).eq("user_id", user_id).eq("id", tid).execute()
+
+    if payload.save_rule:
+        sample = (
+            supabase.table("transactions")
+            .select("description,memo,vendor_normalized")
+            .eq("user_id", user_id)
+            .eq("id", payload.transaction_ids[0])
+            .single()
+            .execute()
+            .data
+        )
+        kw = (sample.get("vendor_normalized") or sample.get("description") or sample.get("memo") or "").strip()
+        if kw:
+            supabase.table("rules").insert({
+                "user_id": user_id,
+                "keyword": kw,
+                "target": "any",
+                "category": payload.category or "미분류",
+                "is_fixed": payload.is_fixed,
+                "is_active": True,
+                "priority": 100,
+            }).execute()
+    return {"ok": True, "updated": len(payload.transaction_ids)}
+
+# === 리포트 ===
+class ReportRequest(BaseModel):
+    year: int
+    month: Optional[int] = None
+    branch: Optional[str] = None
+    granularity: Literal['day', 'week', 'month'] = 'month'
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    start_month: Optional[int] = None   # ✅ 추가
+    end_month: Optional[int] = None     # ✅ 추가
+
+
+@app.post("/reports")
+async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(None)):
+    user_id = await get_user_id(authorization)
+
+    # === 데이터 가져오기 ===
+    data = supabase.table("transactions").select("*").eq("user_id", user_id).execute().data or []
+    df = pd.DataFrame(data)
+
+    if df.empty:
+        return {
+            "summary": {},
+            "by_category": [],
+            "by_fixed": [],
+            "by_period": [],
+            "income_details": [],
+            "expense_details": []
+        }
+
+    # === 날짜 변환 ===
+    df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce")
+    df = df.dropna(subset=["tx_date"])
+
+    # === ✅ [1] 기간 필터링 ===
+    if req.granularity == "day" and req.start_date and req.end_date:
+        # 🔹 일별: 날짜 범위 기준
+        start = pd.to_datetime(req.start_date)
+        end = pd.to_datetime(req.end_date)
+        df = df[(df["tx_date"] >= start) & (df["tx_date"] <= end)]
+
+    elif req.granularity == "month" and req.start_month and req.end_month:
+        # 🔹 월별: 여러 달 범위 지원 (예: 8~9월)
+        df = df[(df["tx_date"].dt.year == req.year) &
+                (df["tx_date"].dt.month >= req.start_month) &
+                (df["tx_date"].dt.month <= req.end_month)]
+
+    else:
+        # 🔹 일반: 연도/월 단일 기준
+        if req.year:
+            df = df[df["tx_date"].dt.year == req.year]
+        if req.month:
+            df = df[df["tx_date"].dt.month == req.month]
+
+    # === 지점 필터 ===
+    if req.branch:
+        df = df[df["branch"] == req.branch]
+
+    # === 정렬 ===
+    df = df.sort_values("tx_date", ascending=False)
+
+    # === 기본 통계 ===
+    total_in = df[df["amount"] > 0]["amount"].sum()
+    total_out = df[df["amount"] < 0]["amount"].sum()
+    summary = {
+        "total_in": float(total_in),
+        "total_out": float(total_out),
+        "net": float(total_in + total_out)
+    }
+
+    # === 카테고리별 ===
+    by_category = (
+        df.groupby("category", dropna=False)["amount"]
+        .sum()
+        .reset_index()
+        .rename(columns={"amount": "sum"})
+        .fillna({"category": "미분류"})
+        .to_dict("records")
+    )
+
+    # === 고정/변동별 ===
+    df["is_fixed"] = df.get("is_fixed", False)
+    by_fixed = (
+        df.groupby("is_fixed")["amount"]
+        .sum()
+        .reset_index()
+        .rename(columns={"amount": "sum"})
+        .to_dict("records")
+    )
+
+    # === ✅ [2] 기간 단위(period) 계산 ===
+    if req.granularity == "week":
+        df["period"] = (df["tx_date"] - pd.to_timedelta(df["tx_date"].dt.weekday, unit="D")).dt.strftime("%Y-%m-%d")
+    elif req.granularity == "month":
+        df["period"] = df["tx_date"].dt.strftime("%Y-%m")
+    else:  # day
+        df["period"] = df["tx_date"].dt.strftime("%Y-%m-%d")
+
+    # === 기간별 합계 ===
+    by_period = (
+        df.groupby("period")
+        .agg(
+            total_in=("amount", lambda x: x[x > 0].sum()),
+            total_out=("amount", lambda x: x[x < 0].sum()),
+            fixed_out=("amount", lambda x: x[(x < 0) & (df.loc[x.index, "is_fixed"] == True)].sum()),
+            variable_out=("amount", lambda x: x[(x < 0) & (df.loc[x.index, "is_fixed"] == False)].sum()),
+            net=("amount", "sum")
+        )
+        .reset_index()
+        .sort_values("period")
+        .to_dict("records")
+    )
+
+    # === 상세 내역 ===
+    income_details = (
+        df[df["amount"] > 0]
+        .sort_values("tx_date", ascending=False)
+        [["tx_date", "description", "amount", "category", "is_fixed"]]
+        .to_dict("records")
+    )
+
+    expense_details = (
+        df[df["amount"] < 0]
+        .sort_values("tx_date", ascending=False)
+        [["tx_date", "description", "amount", "category", "is_fixed"]]
+        .to_dict("records")
+    )
+
+    return {
+        "summary": summary,
+        "by_category": by_category,
+        "by_fixed": by_fixed,
+        "by_period": by_period,
+        "income_details": income_details,
+        "expense_details": expense_details
+    }
+
+
+@app.get("/analyses/meta")
+async def get_analyses_meta(
+    branch: str,
+    authorization: Optional[str] = Header(None)
+):
+    """
+    GET /analyses/meta?branch=동탄역점
+    👉 해당 유저 + 지점의 메타데이터 불러오기
+    """
+    user_id = await get_user_id(authorization)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    try:
+        # ✅ Supabase 요청
+        res = (
+            supabase.table("analyses_meta")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("branch", branch)
+            .maybe_single()
+            .execute()
+        )
+
+        # ✅ 안전 처리: None 방지
+        data = getattr(res, "data", None)
+
+        if data:
+            # ✅ 정상적으로 데이터가 존재할 경우 그대로 반환
+            return data
+        else:
+            # ✅ 데이터가 없을 경우 기본 구조 반환
+            return {"designers": [], "interns": 0, "visitors_total": 0}
+
+    except Exception as e:
+        # ✅ 에러 발생 시에도 안전하게 기본값 반환
+        print("[❌ get_analyses_meta 오류 발생]", e)
+        return {"designers": [], "interns": 0, "visitors_total": 0}
+
+@app.post("/analyses/meta")
+async def save_analyses_meta(
+    payload: dict,
+    authorization: Optional[str] = Header(None)
+):
+    """
+    POST /analyses/meta
+    {
+        "branch": "동탄역점",
+        "designers": ["김실장","박디자이너"],
+        "interns": 2,
+        "visitors_total": 480
+    }
+    """
+    user_id = await get_user_id(authorization)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    branch = payload.get("branch")
+    if not branch:
+        raise HTTPException(status_code=400, detail="branch is required")
+
+    data = {
+        "user_id": user_id,
+        "branch": branch,
+        "designers": payload.get("designers", []),
+        "interns": payload.get("interns", 0),
+        "visitors_total": payload.get("visitors_total", 0),
+        "updated_at": datetime.now(timezone.utc)
+    }
+
+    res = (
+        supabase.table("analyses_meta")
+        .upsert(data, on_conflict="user_id,branch")
+        .execute()
+    )
+
+    if res.error:
+        raise HTTPException(status_code=500, detail=f"DB 저장 실패: {res.error}")
+    return {"status": "ok", "saved": data}
+
+@app.post("/transactions/summary")
+async def get_tx_summary(payload: dict, authorization: Optional[str] = Header(None)):
+    """
+    branch, start_month, end_month 를 받아서
+    해당 기간의 수입/지출 합계를 반환
+    """
+    user_id = await get_user_id(authorization)
+
+    branch = payload.get("branch")
+    start_month = payload.get("start_month")
+    end_month = payload.get("end_month")
+
+    # 시작/종료 날짜 계산
+    start_date = f"{start_month}-01"
+    end_date = pd.Period(end_month).end_time.strftime("%Y-%m-%d")
+
+    q = (
+        supabase.table("transactions")
+        .select("amount, category, tx_date")
+        .eq("user_id", user_id)
+        .eq("branch", branch)
+        .gte("tx_date", start_date)
+        .lte("tx_date", end_date)
+        .execute()
+    )
+
+    txs = q.data or []
+    income_total = sum(float(r["amount"]) for r in txs if float(r["amount"]) > 0)
+    expense_total = abs(sum(float(r["amount"]) for r in txs if float(r["amount"]) < 0))
+
+    return {
+        "income_total": income_total,
+        "expense_total": expense_total,
+        "count": len(txs)
+    }
+
+@app.get("/meta/designers")
+async def get_designers(
+    branch: str = Query(...),
+    authorization: Optional[str] = Header(None)
+):
+    """
+    특정 지점의 디자이너 목록 반환
+    """
+    user_id = await get_user_id(authorization)
+
+    res = (
+        supabase.table("designer_meta")
+        .select("name, rank")
+        .eq("user_id", user_id)
+        .eq("branch", branch)
+        .execute()
+    )
+
+    designers = [{"name": r["name"], "rank": r["rank"]} for r in res.data]
+    return {"designers": designers}
+
+
+@app.post("/meta/designers")
+async def save_designers(
+    payload: dict = Body(...),
+    authorization: Optional[str] = Header(None)
+):
+    """
+    지점별 디자이너 목록 저장 (전체 교체)
+    {
+      "branch": "동탄역점",
+      "designers": [{ "name": "홍길동", "rank": "실장" }, ...]
+    }
+    """
+    user_id = await get_user_id(authorization)
+    branch = payload.get("branch")
+    designers = payload.get("designers", [])
+
+    if not branch:
+        raise HTTPException(status_code=400, detail="branch is required")
+
+    # 기존 데이터 삭제
+    supabase.table("designer_meta").delete().eq("user_id", user_id).eq("branch", branch).execute()
+
+    # 새 데이터 삽입
+    if designers:
+        rows = [
+            {
+                "user_id": user_id,
+                "branch": branch,
+                "name": d["name"],
+                "rank": d.get("rank", "디자이너")
+            }
+            for d in designers
+        ]
+        supabase.table("designer_meta").insert(rows).execute()
+
+    return {"ok": True, "count": len(designers)}
+
+
+# @app.get("/transactions/salary_candidates")
+# async def get_salary_candidates(
+#     branch: str,
+#     start_month: str,
+#     end_month: str,
+#     authorization: Optional[str] = Header(None)
+# ):
+#     """
+#     엑셀 기반 거래내역 중 지출(amount < 0)이며
+#     description 또는 memo에 디자이너 이름이 포함된 항목 자동 탐색
+#     """
+#     user_id = await get_user_id(authorization)
+
+#     # 디자이너 목록 불러오기
+#     res_designers = (
+#         supabase.table("designer_meta")
+#         .select("name")
+#         .eq("user_id", user_id)
+#         .eq("branch", branch)
+#         .execute()
+#     )
+#     names = [r["name"] for r in res_designers.data]
+#     if not names:
+#         return []
+
+#     # 날짜 범위 계산
+#     start_date = f"{start_month}-01"
+#     end_date = f"{end_month}-31"
+
+#     # 거래내역 불러오기
+#     txs = (
+#         supabase.table("assets_log")
+#         .select("id, created_at, description, memo, amount, branch")
+#         .eq("user_id", user_id)
+#         .eq("branch", branch)
+#         .lt("amount", 0)  # 지출만
+#         .gte("created_at", start_date)
+#         .lte("created_at", end_date)
+#         .execute()
+#         .data
+#         or []
+#     )
+
+#     results = []
+#     for tx in txs:
+#         text = (tx.get("description") or "") + " " + (tx.get("memo") or "")
+#         for n in names:
+#             if n and n in text:
+#                 results.append({
+#                     "tx_id": tx["id"],
+#                     "tx_date": tx["created_at"][:10],
+#                     "description": tx["description"] or tx["memo"] or "",
+#                     "amount": tx["amount"],
+#                     "matched_designer": n,
+#                     "branch": tx.get("branch")
+#                 })
+#                 break
+#     return results
+
+
+# @app.post("/transactions/salary_confirm")
+# async def save_salary_confirm(
+#     payload: dict = Body(...),
+#     authorization: Optional[str] = Header(None)
+# ):
+#     """
+#     선택된 항목을 급여로 확정 저장
+#     {
+#       "branch": "동탄역점",
+#       "month_range": { "start": "2025-09", "end": "2025-09" },
+#       "items": [{ "tx_id": "uuid", "name": "홍길동", "amount": 3500000, "tx_date": "2025-09-28", "description": "급여" }]
+#     }
+#     """
+#     user_id = await get_user_id(authorization)
+#     branch = payload.get("branch")
+#     items = payload.get("items", [])
+
+#     if not branch or not items:
+#         raise HTTPException(status_code=400, detail="branch/items required")
+
+#     # 디자이너 직급 맵 가져오기
+#     meta = (
+#         supabase.table("designer_meta")
+#         .select("name, rank")
+#         .eq("user_id", user_id)
+#         .eq("branch", branch)
+#         .execute()
+#     )
+#     rank_map = {r["name"]: r["rank"] for r in meta.data}
+
+#     rows = []
+#     for it in items:
+#         month = it["tx_date"][:7]
+#         rows.append({
+#             "user_id": user_id,
+#             "branch": branch,
+#             "name": it["name"],
+#             "rank": rank_map.get(it["name"], "디자이너"),
+#             "month": month,
+#             "amount": it["amount"],
+#             "tx_ids": [it["tx_id"]],
+#         })
+
+#     supabase.table("designer_salaries").insert(rows).execute()
+#     return {"ok": True, "count": len(rows)}
+
+
+# @app.get("/transactions/salary_list")
+# async def get_salary_list(
+#     branch: str,
+#     month: str,
+#     authorization: Optional[str] = Header(None)
+# ):
+#     """
+#     특정 지점/월의 확정된 급여 내역 조회
+#     """
+#     user_id = await get_user_id(authorization)
+#     res = (
+#         supabase.table("designer_salaries")
+#         .select("name, rank, month, amount")
+#         .eq("user_id", user_id)
+#         .eq("branch", branch)
+#         .eq("month", month)
+#         .execute()
+#     )
+#     return res.data
+
+# # === 디자이너 월급 조회 (지점 + 월 범위) ===
+# @app.get("/designer_salaries/range")
+# async def get_designer_salaries_range(
+#     branch: str,
+#     start_month: str,
+#     end_month: str,
+#     authorization: Optional[str] = Header(None)
+# ):
+#     """
+#     GET /designer_salaries/range?branch=동탄역점&start_month=2025-08&end_month=2025-09
+#     👉 지정된 지점의 특정 기간(월 단위) 디자이너 급여 목록을 반환
+#     """
+#     user_id = await get_user_id(authorization)
+
+#     try:
+#         data = (
+#             supabase.table("designer_salaries")
+#             .select("name, rank, month, amount")
+#             .eq("user_id", user_id)
+#             .eq("branch", branch)
+#             .gte("month", start_month)
+#             .lte("month", end_month)
+#             .order("month", desc=True)
+#             .execute()
+#             .data
+#         ) or []
+#     except Exception as e:
+#         print(f"⚠️ get_designer_salaries_range 오류: {e}")
+#         data = []
+
+#     return data
+
+# === 최신 통장 잔액 조회 ===
+@app.post("/transactions/latest-balance")
+async def get_latest_balance(body: dict = Body(...), authorization: Optional[str] = Header(None)):
+    """
+    선택된 지점(branch)과 종료월(end_month)을 기준으로,
+    transactions 테이블에서 가장 최근의 balance(잔액)를 반환한다.
+    """
+    branch = body.get("branch")
+    end_month = body.get("end_month")
+
+    if not branch or not end_month:
+        raise HTTPException(status_code=400, detail="branch, end_month는 필수입니다.")
+
+    user_id = await get_user_id(authorization)
+
+    # 종료월의 마지막 날짜 구하기
+    end_date = pd.Period(end_month).end_time.strftime("%Y-%m-%d")
+
+    try:
+        # ✅ 컬럼명: tx_date 사용 (당신의 DB 구조에 맞춤)
+        res = (
+            supabase.table("transactions")
+            .select("balance, tx_date")
+            .eq("user_id", user_id)
+            .eq("branch", branch)
+            .lte("tx_date", end_date)
+            .order("tx_date", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        if res.data and len(res.data) > 0:
+            balance = res.data[0].get("balance", 0)
+            tx_date = res.data[0].get("tx_date", "")
+            return {"balance": balance, "date": tx_date}
+        else:
+            return {"balance": 0, "message": "해당 기간 잔액 데이터 없음"}
+
+    except Exception as e:
+        print("⚠️ 통장 잔액 조회 실패:", e)
+        raise HTTPException(status_code=500, detail=str(e))
+    
+# === GPT 분석 (지출 자동 집계 + 완전 프롬프트 통합 버전) ===
+@app.post('/gpt/salon-analysis')
+async def salon_analysis(
+    body: dict = Body(...),
+    authorization: Optional[str] = Header(None),
+):
+    """
+    GPT 재무 분석 + Supabase 자동 저장
+    (고정/변동지출 자동 집계 포함)
+    """
+
+    # === 필수 검사 ===
+    if not openai_client:
+        raise HTTPException(status_code=500, detail='OPENAI_API_KEY 미설정')
+
+    # === 기본 필드 추출 ===
+    branch = body.get("branch")
+    start_month = body.get("start_month")
+    end_month = body.get("end_month")
+    period_text = body.get("period_text", f"{start_month}~{end_month}")
+
+    # === 유효성 검사 ===
+    try:
+        payload = SalonKPIInput(**body)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"입력 데이터 오류: {e}")
+
+    # === 사용자 인증 ===
+    user_id = await get_user_id(authorization)
+
+    # === 1️⃣ 디자이너 급여 데이터 조회 ===
+    try:
+        res = (
+            supabase.table("designer_salaries")
+            .select("name, rank, month, total_amount")
+            .eq("user_id", user_id)
+            .eq("branch", branch)
+            .gte("month", start_month)
+            .lte("month", end_month)
+            .order("month", desc=False)
+            .execute()
+        )
+        designer_salaries = res.data or []
+    except Exception as e:
+        print("⚠️ 디자이너 급여 조회 실패:", e)
+        designer_salaries = []
+
+    designer_info = (
+        ", ".join([
+            f"{r['name']}({r.get('rank','직급미입력')}, {int(r['total_amount']):,}원)"
+            for r in designer_salaries
+        ])
+        if designer_salaries else "해당 기간 디자이너 데이터 없음"
+    )
+
+    # === 2️⃣ 지출 자동 집계 (expenses 테이블에서 category별 합산) ===
+    try:
+        exp_res = (
+            supabase.table("expenses")
+            .select("amount, category")
+            .eq("branch", branch)
+            .eq("user_id", user_id)
+            .gte("date", start_month)
+            .lte("date", end_month)
+            .execute()
+        )
+        expense_rows = exp_res.data or []
+        fixed_expense = sum(x["amount"] for x in expense_rows if x["category"] == "고정")
+        variable_expense = sum(x["amount"] for x in expense_rows if x["category"] == "변동")
+    except Exception as e:
+        print("⚠️ 지출 자동 집계 실패:", e)
+        fixed_expense = 0
+        variable_expense = 0
+    # === (2.5) 사업자 통장 잔액 자동 조회 ===
+    try:
+        bal_res = (
+            supabase.table("transactions")
+            .select("balance, date")
+            .eq("user_id", user_id)
+            .eq("branch", branch)
+            .lte("date", end_month)
+            .order("date", desc=True)
+            .limit(1)
+            .execute()
+        )
+        cash_balance = bal_res.data[0]["balance"] if bal_res.data else 0
+    except Exception as e:
+        print("⚠️ 통장 잔액 조회 실패:", e)
+        cash_balance = 0
+    # === 3️⃣ 매출 관련 데이터 (프론트 입력 or 합계) ===
+    total_sales = getattr(payload, "total_sales", 0)
+    card_sales = getattr(payload, "card_sales", 0)
+    pay_sales = getattr(payload, "pay_sales", 0)
+    cash_sales = getattr(payload, "cash_sales", 0)
+    account_sales = getattr(payload, "account_sales", 0)
+    pass_paid_total = getattr(payload, "pass_paid_total", 0)
+    pass_used_total = getattr(payload, "realized_from_pass", 0)
+    visitors_total = getattr(payload, "visitors_total", 0)
+    bank_inflow = getattr(payload, "bank_inflow", 0)
+    interns = getattr(payload, "interns", 0)
+
+    # === 4️⃣ GPT 프롬프트 구성 ===
+    prompt = f"""
+💈 프로디안 통합 재무·성장 리포트 프롬프트 (완전판)
+
+당신은 미용실 전문 재무 분석가이자 경영 컨설턴트 AI입니다.
+입력된 데이터를 기반으로 '{branch}'의
+실현매출 중심 손익분석 + 재무건전성 + 성장률 + 결제구조 + 배당금 제안 + 예측 시나리오를 통합 평가하십시오.
+모든 금액은 원(₩) 단위입니다.
+결과는 가독성 높은 리포트 형태로 정리하고,
+마지막에는 한 줄평으로 핵심 상태를 요약하십시오.
+
+⸻
+
+[Ⅰ. 지점 기본정보]
+    • 지점명: {branch}
+    • 분석기간: {start_month} ~ {end_month}
+    • 디자이너(이름/직급): {designer_info}
+    • 인턴 수: {interns}
+    • 매장 형태: 시술 + 클리닉
+
+⸻
+
+[Ⅱ. 매출 입력(숫자만)]
+    • 총매출(기간 합계): {total_sales:,}
+    • 카드매출: {card_sales:,}
+    • 페이매출: {pay_sales:,}
+    • 현금매출: {cash_sales:,}
+    • 계좌이체매출: {account_sales:,}
+    • 정액권 결제총액(선결제): {pass_paid_total:,}
+    • 정액권 차감총액(실사용): {pass_used_total:,}
+    • 방문고객(기간 합계): {visitors_total:,}
+    • 사업자 통장 유입총액(기간 합계): {bank_inflow:,}
+
+⸻
+
+[Ⅲ. 지출 입력(숫자만)]
+    • 고정지출(기간 합계): {fixed_expense:,}
+    • 변동지출(기간 합계): {variable_expense:,}
+
+⸻
+
+[Ⅳ. 커미션 구조 (표준율)]
+구간(만원)\t디자이너\t실장\t부원장\t대표원장\t대표
+1000↓\t36%\t37%\t38%\t43%\t43%
+1000~1300\t37%\t38%\t39%\t43%\t43%
+1300~1600\t38%\t39%\t40%\t43%\t43%
+1600~2000\t39%\t40%\t41%\t43%\t43%
+2000~2300\t40%\t41%\t42%\t43%\t43%
+2300~2600\t41%\t41%\t42%\t43%\t43%
+2600↑\t42%\t42%\t44%\t43%\t43%
+
+⸻
+
+[Ⅴ. 자동 계산 규칙]
+정액권 잔액 = 정액권_결제 − 정액권_차감  
+소진률(%) = (정액권_차감 ÷ 정액권_결제) × 100  
+실현매출 = (총매출 − 정액권_결제) + 정액권_차감  
+정액권 결제비중 = (정액권_결제 ÷ 총매출) × 100  
+정액권 실현비중 = (정액권_차감 ÷ 실현매출) × 100  
+총지출 = 고정지출 + 변동지출  
+순이익 = 실현매출 − 총지출  
+실현 수익률(%) = (순이익 ÷ 실현매출) × 100  
+회계 수익률(%) = (총매출 − 총지출) ÷ 총매출 × 100  
+수익률 격차(%p) = 실현 수익률 − 회계 수익률  
+
+⸻
+
+[Ⅵ. 결제 구조 및 수수료 효율 분석]
+카드 비중(%) = (카드매출 ÷ 총매출) × 100  
+페이 비중(%) = (페이매출 ÷ 총매출) × 100  
+현금 비중(%) = (현금매출 ÷ 총매출) × 100  
+계좌 비중(%) = (계좌매출 ÷ 총매출) × 100  
+총결제수수료손실(₩) = 총매출 − 통장유입  
+수수료손실률(%) = ((총매출 − 통장유입) ÷ 총매출) × 100  
+
+📉 수수료 리스크 해석:
+0~2% → 우수 / 2~4% → 보통 / 4% 이상 → 개선 필요
+
+⸻
+
+[Ⅶ. 재무 건전성 분석]
+부채비율(%) = (정액권 잔액 ÷ 실현매출) × 100  
+현금보유율(%) = (사업자통장잔액 ÷ 월평균지출) × 100  
+재무건전성 등급:  
+A: 부채<15% & 현금>100%  
+B: 부채15~25% or 현금60~100%  
+C: 부채25~40% or 현금40~60%  
+D: 부채>40% or 현금<40%
+
+⸻
+
+[Ⅷ. 성장률 분석]
+항목\t계산식\t해석
+매출성장률(%)\t(현재매출−이전매출)÷이전매출×100\t외형 성장속도
+객수성장률(%)\t(현재객수−이전객수)÷이전객수×100\t고객 유지력
+객단가성장률(%)\t(현재객단가−이전객단가)÷이전객단가×100\t시술력 향상
+리뷰성장률(%)\t(현재리뷰−이전리뷰)÷이전리뷰×100\t만족도 추세
+정액권소진률(%)\t(정액권_차감 ÷ 정액권_결제)×100\t리텐션 효율
+
+성장엔진지수(GEI):  
+80↑ 고성장 / 60~80 안정 / 40~60 정체 / 40↓ 하락 위험
+
+⸻
+
+[Ⅸ. 성장 예측 시나리오]
+3개월 후 예상실현매출 = (최근3개월평균실현매출) × (1+매출성장률)
+6개월 후 예상실현매출 = (최근6개월평균실현매출) × (1+매출성장률/2)
+12개월 후 예상실현매출 = (연평균성장률) × 실현매출
+예상순이익 = 예상실현매출 × 평균수익률
+
+    • 안정성 강화형: 비용 최적화, 재무A~B
+    • 공격적 성장형: 매출 20%↑, 현금보유율 80% 이상
+    • 리스크 축소형: 부채율 30%↓, 순이익률 개선 중심
+
+⸻
+
+[Ⅹ. 배당금 제안 (사업자 정산 가이드)]
+배당가능액 = 순이익 × 배당가능률  
+배당가능률 =  
+  0.3 (기본)  
+  0.4 (현금보유율>100% or 부채율<15%)  
+  0.2 (부채율>40% or 현금보유율<40%)
+월평균배당 = 배당가능액 ÷ 기간개월수
+(단, 1개월치 지출액은 예비유보금으로 남겨야 함)
+
+⸻
+
+[Ⅺ. 출력 형식 예시]
+📊 요약
+    • 실현매출: ₩(자동 계산)
+    • 실현수익률: XX%
+    • 회계수익률: XX%
+    • 수수료손실률: XX%
+    • 부채비율: XX%
+    • 현금보유율: XX%
+    • 재무등급: A~D
+    • 성장률: 매출XX% / 객수XX% / 객단가XX%
+    • 월평균배당가능액: ₩OO
+
+💬 인사이트
+    • 결제구조 효율성 분석
+    • 부채·현금 흐름 안정성
+    • 성장 포인트 3가지
+    • 개선 우선순위 3가지
+
+🎯 KPI 제안
+항목\t목표\t기준
+월매출\t₩OO\t+15%
+순이익률\tXX%\t+3p
+부채비율\tXX%\t↓5p
+정액권소진률\tXX%\t80%↑
+
+💡 한줄평
+“{branch or '지점'}은(는) {{핵심상태}} 단계로, 향후 {{추천전략}} 중심의 경영이 가장 효율적입니다.”
+
+⸻
+
+📎 주의사항 요약
+    • 금액은 부가세 포함 실제 수치로 입력.
+    • 정액권 금액은 “판매 시점 결제액”과 “차감(사용)액”을 반드시 구분.
+    • 통장유입액은 카드/페이/현금 정산 후 실제 입금된 금액 기준.
+    • 잔액(현금보유)은 분석 종료 시점 기준.
+"""
+
+    # === GPT 호출 ===
+    resp = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0.3,
+        messages=[
+            {
+                "role": "system",
+                "content": "당신은 미용실 재무 컨설턴트입니다. 수식을 근거로 명확하고 실무적으로 분석하십시오."
+            },
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    analysis_text = resp.choices[0].message.content
+
+    # === 결과 저장 ===
+    title_date = pd.Timestamp.now(tz='Asia/Seoul').strftime('%Y-%m-%d')
+    title = f"{branch} / {title_date} / {period_text} 분석"
+
+    try:
+        ins = supabase.table('analyses').insert({
+            'user_id': user_id,
+            'branch': branch,
+            'title': title,
+            'params': payload.model_dump(),
+            'result': analysis_text,
+            'created_at': datetime.now(timezone.utc).isoformat()  # ✅ 추가
+        }).execute()
+        analysis_id = ins.data[0]['id'] if ins.data else None
+    except Exception as e:
+        print("[GPT 분석 저장 실패]", e)
+        analysis_id = None
+
+    return {
+        "analysis": analysis_text,
+        "analysis_id": analysis_id,
+        "title": title,
+        "fixed_expense": fixed_expense,
+        "variable_expense": variable_expense,
+        "designers_used": designer_salaries
+    }
+
+@app.get("/analyses")
+async def list_analyses(authorization: Optional[str] = Header(None)):
+    """
+    🔹 admin / viewer 구분 없이 전체 GPT 분석 리포트 조회 가능
+    """
+    user_id = await get_user_id(authorization)
+    role = await get_role(user_id)
+
+    try:
+        q = (
+            supabase.table("analyses")
+            .select("id, user_id, branch, title, created_at")  # ✅ user_id 포함
+            .order("created_at", desc=True)
+        )
+
+        # 🔸 과거에는 .eq("user_id", user_id) 로 제한했지만
+        #     지금은 역할 무관 전체 접근 허용
+        #     (필요 시 admin만 전체 조회로 변경 가능)
+
+        res = q.execute()
+        items = res.data or []
+
+        # 🔹 viewer도 볼 수 있게 필터링 제거 완료
+        return {"items": items}
+
+    except Exception as e:
+        print("⚠️ [list_analyses 오류]:", e)
+        raise HTTPException(status_code=500, detail=f"조회 실패: {e}")
+
+@app.get("/analyses/{analysis_id}")
+async def get_analysis_detail(
+    analysis_id: str,
+    authorization: Optional[str] = Header(None)
+):
+    """
+    🔹 admin / viewer 구분 없이 모든 분석 리포트 조회 가능
+    """
+    user_id = await get_user_id(authorization)
+    role = await get_role(user_id)
+
+    try:
+        # ✅ user_id 필터 제거 — 누구든 전체 분석 열람 가능
+        res = (
+            supabase.table("analyses")
+            .select("*")
+            .eq("id", analysis_id)
+            .maybe_single()
+            .execute()
+        )
+
+        if not res.data:
+            raise HTTPException(status_code=404, detail="분석 리포트를 찾을 수 없습니다.")
+
+        return res.data
+
+    except Exception as e:
+        print(f"⚠️ 분석 상세 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"조회 중 오류: {e}")
+    
+@app.delete("/analyses/{analysis_id}")
+async def delete_analysis(
+    analysis_id: str,
+    authorization: Optional[str] = Header(None)
+):
+    """
+    DELETE /analyses/{id}
+    👉 지정된 분석 리포트를 삭제 (admin만 가능)
+    """
+    user_id = await get_user_id(authorization)
+    role = await get_role(user_id)  # ✅ 역할 확인 추가
+
+    # ✅ viewer는 삭제 불가
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="삭제 권한이 없습니다. (admin만 가능)")
+
+    try:
+        res = (
+            supabase.table("analyses")
+            .delete()
+            .eq("id", analysis_id)  # ✅ user_id 조건 제거 (모두 접근 가능)
+            .execute()
+        )
+
+        # Supabase의 delete는 항상 data=[] 반환하므로 검증 보완
+        if res.data is None or len(res.data) == 0:
+            raise HTTPException(status_code=404, detail="분석 리포트를 찾을 수 없습니다.")
+
+        print(f"🗑️ [분석 삭제 완료] id={analysis_id}, by user={user_id}")
+        return {"ok": True, "deleted_id": analysis_id}
+
+    except Exception as e:
+        print("⚠️ 분석 삭제 오류:", e)
+        raise HTTPException(status_code=500, detail=f"삭제 중 오류: {e}")
