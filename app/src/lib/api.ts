@@ -67,6 +67,7 @@ export const api = {
 };
 
 // ✅ axios 없이 api.get(), api.post() 같은 형식도 동작하게 호환용 추가
+// @ts-ignore
 api.get = async (path: string, options?: any) => {
   const params = options?.params
   const headers = options?.headers
@@ -88,7 +89,7 @@ api.get = async (path: string, options?: any) => {
   const json = await r.json()
   return { data: json }
 }
-
+// @ts-ignore
 api.post = async (path: string, body?: any, options?: any) => {
   const headers = {
     'Content-Type': 'application/json',
