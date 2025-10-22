@@ -2,18 +2,20 @@
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 
-export const apiAuthHeader = (token?: string) => ({
-  headers: { Authorization: `Bearer ${token}` },
-})
+export const apiAuthHeader = async () => {
+  const token = localStorage.getItem('token')
+  return { Authorization: `Bearer ${token}` }
+}
 
 async function req(path: string, init: RequestInit = {}) {
+  const token = localStorage.getItem("token");
   const r = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       ...(init.headers || {}),
       "Accept": "application/json",
     },
-    // 쿠키나 토큰 쓰면 여기에 credentials / Authorization 추가
+    credentials: "include", // ✅ 이거 추가
   });
   if (!r.ok) {
     let msg = `${r.status} ${r.statusText}`;
