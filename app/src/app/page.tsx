@@ -27,6 +27,9 @@ export default function LoginPage() {
       return
     }
 
+    // ✅ 추가: localStorage에 토큰 저장
+    localStorage.setItem('token', token)
+
     try {
       // 3️⃣ /me API에서 role 확인
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE}/me`, {
