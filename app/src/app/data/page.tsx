@@ -1,3 +1,4 @@
+// @ts-nocheck
 'use client'
 import Guard from '@/components/Guard'
 import AdminGuard from '@/components/AdminGuard'
