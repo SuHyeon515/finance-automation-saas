@@ -5,14 +5,14 @@ export const API_BASE =
 // ✅ 안전한 토큰 읽기 (Next.js SSR 대비)
 export const apiAuthHeader = async () => {
   const token =
-    typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    typeof window !== "undefined" ? localStorage.getItem("sb-access-token") : null;
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
 // ✅ 공통 fetch 함수
 async function req(path: string, init: RequestInit = {}) {
   const token =
-    typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    typeof window !== "undefined" ? localStorage.getItem("sb-access-token") : null;
 
   const headers = {
     ...(init.headers || {}),
@@ -86,7 +86,7 @@ export const api = {
 api.get = async (path, options = {}) => {
   const params = options?.params;
   const token =
-    typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    typeof window !== "undefined" ? localStorage.getItem("sb-access-token") : null;
   const q = params
     ? "?" +
       new URLSearchParams(
@@ -109,7 +109,7 @@ api.get = async (path, options = {}) => {
 
 api.post = async (path, body, options = {}) => {
   const token =
-    typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    typeof window !== "undefined" ? localStorage.getItem("sb-access-token") : null;
   const headers = {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
