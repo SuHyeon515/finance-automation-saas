@@ -7,9 +7,20 @@ export const API_BASE =
 // ✅ Supabase 세션에서 토큰 안전하게 읽기
 async function getToken() {
   if (typeof window === "undefined") return null;
+
   try {
-    const { data } = await supabase.auth.getSession();
-    return data.session?.access_token || null;
+    const session = (await supabase.auth.getSession()).data.session;
+
+    // ✅ fallback: localStorage 직접 접근
+    if (!session) {
+      const raw = localStorage.getItem("supabase.auth.token");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return parsed?.currentSession?.access_token || null;
+      }
+    }
+
+    return session?.access_token || null;
   } catch (e) {
     console.warn("⚠️ getToken() 실패:", e);
     return null;
