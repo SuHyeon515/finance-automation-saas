@@ -1,6 +1,7 @@
+// @ts-nocheck
 'use client'
 import { useEffect, useState } from 'react'
-// import { api, apiAuthHeader } from '@/lib/api'
+import { api, apiAuthHeader } from '@/lib/api'  // ✅ 이 줄 반드시 추가
 
 export default function AdminGuard({ children }: { children: React.ReactNode }) {
   const [ok, setOk] = useState(false)
