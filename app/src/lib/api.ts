@@ -7,16 +7,22 @@ export const apiAuthHeader = async () => {
   return { Authorization: `Bearer ${token}` }
 }
 
+// ✅ Authorization 자동 추가 + credentials 포함
 async function req(path: string, init: RequestInit = {}) {
   const token = localStorage.getItem("token");
+
+  const headers = {
+    ...(init.headers || {}),
+    "Accept": "application/json",
+    ...(token ? { "Authorization": `Bearer ${token}` } : {}), // ✅ 토큰 자동 첨부
+  };
+
   const r = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: {
-      ...(init.headers || {}),
-      "Accept": "application/json",
-    },
-    credentials: "include", // ✅ 이거 추가
+    headers,
+    credentials: "include", // ✅ 쿠키/세션 포함 (로그인 유지)
   });
+
   if (!r.ok) {
     let msg = `${r.status} ${r.statusText}`;
     try {
@@ -25,6 +31,7 @@ async function req(path: string, init: RequestInit = {}) {
     } catch {}
     throw new Error(msg);
   }
+
   // 파일 다운로드 (엑셀) 같은 바이너리 응답은 호출부에서 처리
   const ct = r.headers.get("content-type") || "";
   if (ct.includes("application/json")) return r.json();
@@ -74,6 +81,7 @@ export const api = {
 api.get = async (path: string, options?: any) => {
   const params = options?.params
   const headers = options?.headers
+  const token = localStorage.getItem("token"); // ✅ 추가
   const q = params
     ? '?' +
       new URLSearchParams(
@@ -87,21 +95,27 @@ api.get = async (path: string, options?: any) => {
     headers: {
       ...(headers || {}),
       Accept: 'application/json',
+      ...(token ? { "Authorization": `Bearer ${token}` } : {}), // ✅ 추가
     },
+    credentials: "include", // ✅ 추가
   })
   const json = await r.json()
   return { data: json }
 }
+
 // @ts-ignore
 api.post = async (path: string, body?: any, options?: any) => {
+  const token = localStorage.getItem("token"); // ✅ 추가
   const headers = {
     'Content-Type': 'application/json',
     ...(options?.headers || {}),
+    ...(token ? { "Authorization": `Bearer ${token}` } : {}), // ✅ 추가
   }
   const r = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
+    credentials: "include", // ✅ 추가
   })
   const json = await r.json()
   return { data: json }
