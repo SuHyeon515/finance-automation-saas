@@ -1,14 +1,15 @@
 // @ts-nocheck
 export const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+  process.env.NEXT_PUBLIC_API_BASE || "https://finance-automation-saas.onrender.com";
 
+// ✅ 안전한 토큰 읽기 (Next.js SSR 대비)
 export const apiAuthHeader = async () => {
   const token =
     typeof window !== "undefined" ? localStorage.getItem("token") : null;
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
-// ✅ Authorization 자동 추가 + credentials 포함
+// ✅ 공통 fetch 함수
 async function req(path: string, init: RequestInit = {}) {
   const token =
     typeof window !== "undefined" ? localStorage.getItem("token") : null;
@@ -16,50 +17,47 @@ async function req(path: string, init: RequestInit = {}) {
   const headers = {
     ...(init.headers || {}),
     Accept: "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}), // ✅ 토큰 자동 첨부
+    ...(token ? { Authorization: `Bearer ${token}` } : {}), // ✅ 자동 첨부
   };
 
-  const r = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers,
-    credentials: "include", // ✅ 쿠키/세션 포함 (로그인 유지)
+    credentials: "include",
   });
 
-  if (!r.ok) {
-    let msg = `${r.status} ${r.statusText}`;
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
     try {
-      const j = await r.json();
+      const j = await res.json();
       if (j?.detail) msg = j.detail;
     } catch {}
     throw new Error(msg);
   }
 
-  const ct = r.headers.get("content-type") || "";
-  if (ct.includes("application/json")) return r.json();
-  return r;
+  const ct = res.headers.get("content-type") || "";
+  if (ct.includes("application/json")) return res.json();
+  return res;
 }
 
+// ✅ 공통 API 객체
 export const api = {
   me: () => req(`/me`),
   branches: () => req(`/meta/branches`),
   uploads: (params = {}) => {
     const q = new URLSearchParams(
-      Object.fromEntries(
-        Object.entries(params)
-          .filter(([, v]) => v !== undefined && v !== null)
-          .map(([k, v]) => [k, String(v)])
-      )
+      Object.entries(params)
+        .filter(([, v]) => v !== undefined && v !== null)
+        .map(([k, v]) => [k, String(v)])
     );
     return req(`/uploads${q.toString() ? `?${q}` : ""}`);
   },
   deleteUpload: (id) => req(`/uploads/${id}`, { method: "DELETE" }),
   unclassified: (params = {}) => {
     const q = new URLSearchParams(
-      Object.fromEntries(
-        Object.entries(params)
-          .filter(([, v]) => v !== undefined && v !== null)
-          .map(([k, v]) => [k, String(v)])
-      )
+      Object.entries(params)
+        .filter(([, v]) => v !== undefined && v !== null)
+        .map(([k, v]) => [k, String(v)])
     );
     return req(`/transactions/unclassified${q.toString() ? `?${q}` : ""}`);
   },
@@ -84,32 +82,28 @@ export const api = {
     }),
 };
 
-// ✅ axios 호환
+// ✅ axios 호환용
 api.get = async (path, options = {}) => {
   const params = options?.params;
-  const headers = options?.headers || {};
   const token =
     typeof window !== "undefined" ? localStorage.getItem("token") : null;
   const q = params
     ? "?" +
       new URLSearchParams(
         Object.fromEntries(
-          Object.entries(params).filter(
-            ([_, v]) => v !== undefined && v !== null
-          )
+          Object.entries(params).filter(([_, v]) => v !== undefined && v !== null)
         )
       ).toString()
     : "";
-  const r = await fetch(`${API_BASE}${path}${q}`, {
+  const res = await fetch(`${API_BASE}${path}${q}`, {
     method: "GET",
     headers: {
-      ...headers,
       Accept: "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}), // ✅ 추가
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     credentials: "include",
   });
-  const json = await r.json();
+  const json = await res.json();
   return { data: json };
 };
 
@@ -118,15 +112,14 @@ api.post = async (path, body, options = {}) => {
     typeof window !== "undefined" ? localStorage.getItem("token") : null;
   const headers = {
     "Content-Type": "application/json",
-    ...(options?.headers || {}),
-    ...(token ? { Authorization: `Bearer ${token}` } : {}), // ✅ 추가
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
-  const r = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
     credentials: "include",
   });
-  const json = await r.json();
+  const json = await res.json();
   return { data: json };
 };
