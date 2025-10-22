@@ -1,18 +1,31 @@
 // @ts-nocheck
+import { createClient } from "@supabase/supabase-js";
+
+// === Supabase Client 생성 ===
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// === API 서버 기본 주소 ===
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "https://finance-automation-saas.onrender.com";
 
-// ✅ 안전한 토큰 읽기 (Next.js SSR 대비)
-export const apiAuthHeader = async () => {
-  const token =
-    typeof window !== "undefined" ? localStorage.getItem("sb-access-token") : null;
-  return token ? { Authorization: `Bearer ${token}` } : {};
-};
+// ✅ Supabase 세션에서 토큰 안전하게 읽기
+async function getToken() {
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    return session?.access_token || null;
+  } catch (e) {
+    console.warn("⚠️ getToken() 실패:", e);
+    return null;
+  }
+}
 
 // ✅ 공통 fetch 함수
 async function req(path: string, init: RequestInit = {}) {
-  const token =
-    typeof window !== "undefined" ? localStorage.getItem("sb-access-token") : null;
+  const token = await getToken();
 
   const headers = {
     ...(init.headers || {}),
@@ -85,8 +98,8 @@ export const api = {
 // ✅ axios 호환용
 api.get = async (path, options = {}) => {
   const params = options?.params;
-  const token =
-    typeof window !== "undefined" ? localStorage.getItem("sb-access-token") : null;
+  const token = await getToken();
+
   const q = params
     ? "?" +
       new URLSearchParams(
@@ -95,6 +108,7 @@ api.get = async (path, options = {}) => {
         )
       ).toString()
     : "";
+
   const res = await fetch(`${API_BASE}${path}${q}`, {
     method: "GET",
     headers: {
@@ -103,23 +117,26 @@ api.get = async (path, options = {}) => {
     },
     credentials: "include",
   });
+
   const json = await res.json();
   return { data: json };
 };
 
 api.post = async (path, body, options = {}) => {
-  const token =
-    typeof window !== "undefined" ? localStorage.getItem("sb-access-token") : null;
+  const token = await getToken();
+
   const headers = {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
+
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
     credentials: "include",
   });
+
   const json = await res.json();
   return { data: json };
 };
