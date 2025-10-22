@@ -8,8 +8,10 @@ export default function AdminGuard({ children }: { children: React.ReactNode }) 
   useEffect(() => {
     (async () => {
       const headers = await apiAuthHeader()
-      const res = await api.get('/me', { headers }).catch(()=>null)
-      const role = res?.data?.role || 'admin'
+      console.log("🔍 headers", headers)
+      const res = await api.get('/me', { headers })
+      console.log("🔍 /me result", res)
+      const role = res?.data?.role || 'viewer'
       setOk(role === 'admin')
     })()
   }, [])
