@@ -109,7 +109,6 @@ const loadLiquidAssets = async () => {
     items.forEach((r: any) => {
       const d = new Date(r.created_at)
       // 🔹 다음 달로 밀어서 저장
-      // d.setMonth(d.getMonth() + 1)
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
       grouped[key] = r.amount // 전월 말 잔액 → 다음 월초로 표시
     })

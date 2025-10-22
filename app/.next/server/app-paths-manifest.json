@@ -1,9 +1,6 @@
 {
-  "/_not-found/page": "app/_not-found/page.js",
-  "/assets/page": "app/assets/page.js",
-  "/dashboard/page": "app/dashboard/page.js",
-  "/upload/page": "app/upload/page.js",
   "/analysis/page": "app/analysis/page.js",
-  "/reports/page": "app/reports/page.js",
-  "/uploads/page": "app/uploads/page.js"
+  "/dashboard/page": "app/dashboard/page.js",
+  "/uploads/page": "app/uploads/page.js",
+  "/page": "app/page.js"
 }

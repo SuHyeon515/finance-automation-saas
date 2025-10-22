@@ -1,6 +1,10 @@
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 
+export const apiAuthHeader = (token?: string) => ({
+  headers: { Authorization: `Bearer ${token}` },
+})
+
 async function req(path: string, init: RequestInit = {}) {
   const r = await fetch(`${API_BASE}${path}`, {
     ...init,
