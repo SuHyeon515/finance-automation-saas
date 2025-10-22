@@ -65,3 +65,40 @@ export const api = {
   report: (body: {year:number; month:number; branch?:string; category?:string; granularity?:"day"|"week"|"month"|"year"}) =>
     req(`/reports`, { method: "POST", body: JSON.stringify(body), headers: {"Content-Type":"application/json"} }),
 };
+
+// ✅ axios 없이 api.get(), api.post() 같은 형식도 동작하게 호환용 추가
+api.get = async (path: string, options?: any) => {
+  const params = options?.params
+  const headers = options?.headers
+  const q = params
+    ? '?' +
+      new URLSearchParams(
+        Object.fromEntries(
+          Object.entries(params).filter(([_, v]) => v !== undefined && v !== null)
+        )
+      ).toString()
+    : ''
+  const r = await fetch(`${API_BASE}${path}${q}`, {
+    method: 'GET',
+    headers: {
+      ...(headers || {}),
+      Accept: 'application/json',
+    },
+  })
+  const json = await r.json()
+  return { data: json }
+}
+
+api.post = async (path: string, body?: any, options?: any) => {
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options?.headers || {}),
+  }
+  const r = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  })
+  const json = await r.json()
+  return { data: json }
+}
