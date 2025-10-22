@@ -1,3 +1,18 @@
 node_modules/
 .env
+<<<<<<< Updated upstream
 .env
+=======
+api/.env
+app/.env.local
+
+# macOS system files
+.DS_Store
+
+# Python cache
+__pycache__/
+*.pyc
+
+# VSCode settings (optional)
+.vscode/
+>>>>>>> Stashed changes
