@@ -13,44 +13,29 @@ export default function LoginPage() {
     e.preventDefault()
     setErr('')
 
-    // 1️⃣ Supabase 로그인
+    // ✅ Supabase 로그인 (세션 자동저장)
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) {
       setErr(error.message)
       return
     }
 
-    // 2️⃣ 토큰 가져오기
-    const token = data.session?.access_token
-    if (!token) {
-      setErr('인증 토큰을 가져올 수 없습니다.')
-      return
-    }
-
-    // ✅ 추가: localStorage에 토큰 저장
-    localStorage.setItem('token', token)
+    // ✅ 세션이 브라우저에 자동 저장됨
+    console.log('✅ 로그인 성공:', data.session)
 
     try {
-      // 3️⃣ /me API에서 role 확인
+      const token = data.session?.access_token
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE}/me`, {
         headers: { Authorization: `Bearer ${token}` },
       })
-      if (!res.ok) {
-        setErr('사용자 정보를 불러올 수 없습니다.')
-        return
-      }
+      if (!res.ok) throw new Error('사용자 정보를 불러올 수 없습니다.')
 
       const userInfo = await res.json()
       const role = userInfo.role || 'viewer'
 
-      console.log('✅ 로그인 성공:', { email, role })
-
-      // 4️⃣ role 기반으로 라우팅
-      if (role === 'admin') {
-        router.push('/dashboard')
-      } else {
-        router.push('/dashboard/viewer')
-      }
+      // ✅ 라우팅
+      if (role === 'admin') router.push('/dashboard')
+      else router.push('/dashboard/viewer')
 
     } catch (err) {
       console.error('❌ 로그인 후 역할 확인 실패:', err)

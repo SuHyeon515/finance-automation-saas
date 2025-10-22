@@ -1,11 +1,18 @@
+// src/lib/api.ts
+
 // @ts-nocheck
 import { createClient } from "@supabase/supabase-js";
 
 // === Supabase Client 생성 ===
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true,        // ✅ 세션 유지
+    autoRefreshToken: true,      // ✅ 토큰 자동 갱신
+    detectSessionInUrl: true,    // ✅ OAuth 로그인 시 필요
+  },
+});
 // === API 서버 기본 주소 ===
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "https://finance-automation-saas.onrender.com";
