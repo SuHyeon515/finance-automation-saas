@@ -1,30 +1,15 @@
-// src/lib/api.ts
-
 // @ts-nocheck
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabaseClient"; // ✅ 기존 클라이언트 import
 
-// === Supabase Client 생성 ===
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: true,        // ✅ 세션 유지
-    autoRefreshToken: true,      // ✅ 토큰 자동 갱신
-    detectSessionInUrl: true,    // ✅ OAuth 로그인 시 필요
-  },
-});
-// === API 서버 기본 주소 ===
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "https://finance-automation-saas.onrender.com";
 
 // ✅ Supabase 세션에서 토큰 안전하게 읽기
 async function getToken() {
-  if (typeof window === 'undefined') return null; // ✅ 서버 환경에서 호출 방지
+  if (typeof window === "undefined") return null;
   try {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    return session?.access_token || null;
+    const { data } = await supabase.auth.getSession();
+    return data.session?.access_token || null;
   } catch (e) {
     console.warn("⚠️ getToken() 실패:", e);
     return null;
@@ -38,7 +23,7 @@ async function req(path: string, init: RequestInit = {}) {
   const headers = {
     ...(init.headers || {}),
     Accept: "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}), // ✅ 자동 첨부
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 
   const res = await fetch(`${API_BASE}${path}`, {
@@ -101,50 +86,4 @@ export const api = {
       body: JSON.stringify(body),
       headers: { "Content-Type": "application/json" },
     }),
-};
-
-// ✅ axios 호환용
-api.get = async (path, options = {}) => {
-  const params = options?.params;
-  const token = await getToken();
-
-  const q = params
-    ? "?" +
-      new URLSearchParams(
-        Object.fromEntries(
-          Object.entries(params).filter(([_, v]) => v !== undefined && v !== null)
-        )
-      ).toString()
-    : "";
-
-  const res = await fetch(`${API_BASE}${path}${q}`, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    credentials: "include",
-  });
-
-  const json = await res.json();
-  return { data: json };
-};
-
-api.post = async (path, body, options = {}) => {
-  const token = await getToken();
-
-  const headers = {
-    "Content-Type": "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    credentials: "include",
-  });
-
-  const json = await res.json();
-  return { data: json };
 };
