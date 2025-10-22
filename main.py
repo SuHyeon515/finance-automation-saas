@@ -37,9 +37,13 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 app = FastAPI()
+# ✅ CORS 설정 — 프론트(Vercel) + 로컬환경 모두 허용
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS or ['*'],
+    allow_origins=[
+        "https://finance-automation-saas-um91.vercel.app",  # Vercel 배포 주소
+        "http://localhost:3000",                            # 로컬 개발용
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
