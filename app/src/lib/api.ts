@@ -19,6 +19,7 @@ export const API_BASE =
 
 // ✅ Supabase 세션에서 토큰 안전하게 읽기
 async function getToken() {
+  if (typeof window === 'undefined') return null; // ✅ 서버 환경에서 호출 방지
   try {
     const {
       data: { session },
