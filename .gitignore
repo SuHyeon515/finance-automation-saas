@@ -1,8 +1,9 @@
+# Node.js
 node_modules/
+
+# Environment files
 .env
-<<<<<<< Updated upstream
-.env
-=======
+.env.local
 api/.env
 app/.env.local
 
@@ -13,6 +14,5 @@ app/.env.local
 __pycache__/
 *.pyc
 
-# VSCode settings (optional)
+# VSCode settings
 .vscode/
->>>>>>> Stashed changes

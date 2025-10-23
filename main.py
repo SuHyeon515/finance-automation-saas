@@ -89,17 +89,28 @@ async def get_user_role(authorization: Optional[str]) -> Optional[str]:
         print("⚠️ get_user_role 오류:", e)
         return None
 
+# === Auth ===
 async def get_role(user_id: str) -> str:
+    """
+    Supabase profiles 테이블에서 role(admin/viewer/user) 조회.
+    service_role 키로 호출해 RLS 우회.
+    """
     try:
-        res = supabase.table('profiles').select('id, role').eq('id', user_id).execute()
-        print(f"🧩 [get_role] user_id={user_id} → res.data={res.data}")
+        # ✅ 서비스 키로 다시 클라이언트 생성 (RLS 무시)
+        admin = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        res = admin.table('profiles').select('role').eq('id', user_id).execute()
 
-        if res.data and res.data[0].get('role'):
-            return res.data[0]['role']
+        if res.data and len(res.data) > 0:
+            role = res.data[0].get('role', 'user')
+            print(f"✅ [get_role] user_id={user_id}, role={role}")
+            return role
+
+        print(f"⚠️ [get_role] user_id={user_id} 결과 없음")
+        return 'user'
+
     except Exception as e:
-        print(f"⚠️ [get_role 오류]: {e}")
-
-    return 'viewer'  # ❗ 기본값은 viewer로 두되, 로그로 확인
+        print(f"❌ [get_role 오류]: {e}")
+        return 'user'
 
 # === Models ===
 class ReportFilter(BaseModel):
@@ -151,44 +162,37 @@ async def health():
 
 @app.get('/meta/branches')
 async def meta_branches(authorization: Optional[str] = Header(None)):
-    """
-    admin 또는 viewer → 전체 지점 목록
-    일반 user → 자신의 지점만
-    """
     user_id = await get_user_id(authorization)
-    role = await get_user_role(authorization)  # ✅ 역할(role)도 확인
+    role = await get_role(user_id)
     names = set()
 
     try:
-        # ✅ admin 또는 viewer면 전체 지점 다 가져오기
-        if role in ["admin", "viewer"]:
-            # branches 테이블 전체 조회
+        if role in ['admin', 'viewer']:
             res1 = supabase.table('branches').select('name').execute()
             for r in res1.data or []:
                 if r.get('name'):
                     names.add(r['name'])
-
-            # transactions 테이블 전체 조회
+            
             res2 = supabase.table('transactions').select('branch').neq('branch', '').execute()
             for r in res2.data or []:
                 if r.get('branch'):
                     names.add(r['branch'])
-
         else:
-            # ✅ 일반 유저는 자기 지점만
             res1 = supabase.table('branches').select('name').eq('user_id', user_id).execute()
             for r in res1.data or []:
                 if r.get('name'):
                     names.add(r['name'])
-
+            
             res2 = supabase.table('transactions').select('branch').eq('user_id', user_id).neq('branch', '').execute()
             for r in res2.data or []:
                 if r.get('branch'):
                     names.add(r['branch'])
 
     except Exception as e:
-        print("⚠️ branches 조회 오류:", e)
+        print(f"⚠️ branches 조회 오류: {e}")
 
+    # ✅ 항상 실행되도록 try 밖으로 이동
+    print(f"✅ [meta/branches] user_id={user_id}, role={role}, count={len(names)}, names={list(names)}")
     return sorted(list(names))
 
 @app.get('/me')
