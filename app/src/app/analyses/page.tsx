@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { API_BASE } from '@/lib/api'
+import { API_BASE, apiAuthHeader } from '@/lib/api' // ✅ 토큰 자동 주입 추가
 
 type Analysis = {
   id: string
@@ -16,13 +16,23 @@ export default function AnalysesPage() {
   const [loading, setLoading] = useState(false)
 
   // ✅ 데이터 불러오기
-  const loadItems = () => {
+  const loadItems = async () => {
     setLoading(true)
-    fetch(`${API_BASE}/analyses`, { credentials: 'include' })
-      .then(r => r.json())
-      .then(d => setItems(d.items || []))
-      .catch(err => console.error('load error:', err))
-      .finally(() => setLoading(false))
+    try {
+      const headers = await apiAuthHeader() // ✅ 토큰 포함
+      const res = await fetch(`${API_BASE}/analyses`, {
+        headers,
+        credentials: 'include',
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const d = await res.json()
+      setItems(d.items || [])
+    } catch (err) {
+      console.error('❌ load error:', err)
+      setItems([])
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -34,21 +44,23 @@ export default function AnalysesPage() {
     if (!confirm('이 분석 리포트를 삭제하시겠습니까?')) return
 
     try {
+      const headers = await apiAuthHeader() // ✅ 토큰 포함
       const res = await fetch(`${API_BASE}/analyses/${id}`, {
         method: 'DELETE',
-        credentials: 'include'
+        headers,
+        credentials: 'include',
       })
 
       if (!res.ok) {
-        const err = await res.json()
+        const err = await res.json().catch(() => ({}))
         alert(`삭제 실패: ${err.detail || res.statusText}`)
         return
       }
 
       alert('삭제 완료되었습니다.')
-      setItems(items.filter(i => i.id !== id)) // 화면에서 즉시 제거
+      setItems(prev => prev.filter(i => i.id !== id)) // ✅ 즉시 화면에서 제거
     } catch (e) {
-      console.error(e)
+      console.error('❌ 삭제 중 오류:', e)
       alert('삭제 중 오류가 발생했습니다.')
     }
   }

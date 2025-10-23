@@ -2,7 +2,7 @@
 
 import { useParams } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { API_BASE } from '@/lib/api'
+import { API_BASE, apiAuthHeader } from '@/lib/api' // ✅ 인증 헤더 추가
 import Link from 'next/link'
 
 export default function AnalysisDetailPage() {
@@ -12,12 +12,27 @@ export default function AnalysisDetailPage() {
 
   useEffect(() => {
     if (!id) return
-    setLoading(true)
-    fetch(`${API_BASE}/analyses/${id}`, { credentials: 'include' })
-      .then(r => r.json())
-      .then(setData)
-      .catch(console.error)
-      .finally(() => setLoading(false))
+
+    const loadDetail = async () => {
+      setLoading(true)
+      try {
+        const headers = await apiAuthHeader() // ✅ Supabase 토큰 자동 주입
+        const res = await fetch(`${API_BASE}/analyses/${id}`, {
+          headers,
+          credentials: 'include',
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const json = await res.json()
+        setData(json)
+      } catch (err) {
+        console.error('❌ 분석 상세 불러오기 실패:', err)
+        setData(null)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    loadDetail()
   }, [id])
 
   if (loading) return <div className="p-6 text-gray-600">불러오는 중...</div>

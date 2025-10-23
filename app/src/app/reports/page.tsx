@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { API_BASE } from '@/lib/api'
+import { API_BASE, apiAuthHeader } from '@/lib/api'
+
 import {
   LineChart, Line, Tooltip, XAxis, YAxis, ResponsiveContainer, Legend, PieChart, Pie, Cell
 } from 'recharts'
@@ -43,8 +44,22 @@ export default function ReportsPage() {
 
   /* ========== 초기 메타 ========== */
   useEffect(() => {
-    fetch(`${API_BASE}/meta/branches`, { credentials: 'include' })
-      .then(r => r.json()).then(setBranches).catch(() => setBranches([]))
+    const loadBranches = async () => {
+      try {
+        const headers = await apiAuthHeader()
+        const res = await fetch(`${API_BASE}/meta/branches`, {
+          headers,
+          credentials: 'include',
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const json = await res.json()
+        setBranches(Array.isArray(json) ? json : [])
+      } catch (e) {
+        console.warn('branches 불러오기 실패:', e)
+        setBranches([])
+      }
+    }
+    loadBranches()
   }, [])
 
   /* ========== 요청 바디 빌더 ========== */
@@ -70,9 +85,13 @@ export default function ReportsPage() {
     setLoading(true)
     setError('')
     try {
+      const headers = await apiAuthHeader()  // ✅ 토큰 헤더 가져오기 추가
       const res = await fetch(`${API_BASE}/reports`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          ...headers,                         // ✅ Authorization 헤더 추가
+          'Content-Type': 'application/json',
+        },
         credentials: 'include',
         body: JSON.stringify(buildReportBody()),
       })
@@ -92,7 +111,6 @@ export default function ReportsPage() {
       setLoading(false)
     }
   }
-
   useEffect(() => {
     loadReport()
   }, [])

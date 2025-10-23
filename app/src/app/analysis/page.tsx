@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { API_BASE } from '@/lib/api'
+import { API_BASE, apiAuthHeader } from '@/lib/api'   // ✅ apiAuthHeader 추가
 import { supabase } from '@/lib/supabaseClient'
 
 export default function GPTSalonAnalysisPage() {
@@ -21,9 +21,9 @@ export default function GPTSalonAnalysisPage() {
   const [cardSales, setCardSales] = useState(0)
   const [paySales, setPaySales] = useState(0)
   const [cashSales, setCashSales] = useState(0)
-  const [accountSales, setAccountSales] = useState(0) // ✅ 계좌이체매출
-  const [bankInflow, setBankInflow] = useState(0)     // ✅ 통장유입총액
-  const [cashBalance, setCashBalance] = useState(0)   // ✅ 사업자통장잔액
+  const [accountSales, setAccountSales] = useState(0)
+  const [bankInflow, setBankInflow] = useState(0)
+  const [cashBalance, setCashBalance] = useState(0)
 
   const [incomeTotal, setIncomeTotal] = useState(0)
   const [expenseTotal, setExpenseTotal] = useState(0)
@@ -31,14 +31,12 @@ export default function GPTSalonAnalysisPage() {
   const [visitorsTotal, setVisitorsTotal] = useState(0)
   const [interns, setInterns] = useState(0)
 
-  // ✅ 전월 대비 데이터
   const [prevSales, setPrevSales] = useState(0)
   const [prevVisitors, setPrevVisitors] = useState(0)
   const [prevPrice, setPrevPrice] = useState(0)
   const [prevReviews, setPrevReviews] = useState(0)
   const [currentReviews, setCurrentReviews] = useState(0)
 
-  // ✅ 디자이너 데이터
   const [designers, setDesigners] = useState<{ name: string; rank: string; month: string; total_amount: number }[]>([])
   const [designerLoaded, setDesignerLoaded] = useState(false)
 
@@ -47,12 +45,24 @@ export default function GPTSalonAnalysisPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // ========== 지점 목록 ==========
+  // ✅ 지점 목록 불러오기
   useEffect(() => {
-    fetch(`${API_BASE}/meta/branches`, { credentials: 'include' })
-      .then(r => r.json())
-      .then(setBranches)
-      .catch(() => setBranches([]))
+    const loadBranches = async () => {
+      try {
+        const headers = await apiAuthHeader() // ✅ 추가
+        const res = await fetch(`${API_BASE}/meta/branches`, {
+          headers,
+          credentials: 'include',
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const json = await res.json()
+        setBranches(Array.isArray(json) ? json : [])
+      } catch (err) {
+        console.warn('branches 불러오기 실패:', err)
+        setBranches([])
+      }
+    }
+    loadBranches()
   }, [])
 
   // ========== 기간 표시 ==========
@@ -73,9 +83,13 @@ export default function GPTSalonAnalysisPage() {
   const fetchAutoSummary = async () => {
     if (!branch || !startMonth || !endMonth) return
     try {
+      const headers = await apiAuthHeader() // ✅ 추가
       const res = await fetch(`${API_BASE}/transactions/summary`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
         credentials: 'include',
         body: JSON.stringify({ branch, start_month: startMonth, end_month: endMonth }),
       })
@@ -94,12 +108,17 @@ export default function GPTSalonAnalysisPage() {
     fetchAutoSummary()
   }, [branch, startMonth, endMonth])
 
+  // ✅ 잔액 계산
   useEffect(() => {
     if (!branch || !startMonth || !endMonth) return
     const fetchBalance = async () => {
+      const headers = await apiAuthHeader() // ✅ 추가
       const res = await fetch(`${API_BASE}/transactions/latest-balance`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
         credentials: 'include',
         body: JSON.stringify({ branch, end_month: endMonth }),
       })
@@ -109,7 +128,7 @@ export default function GPTSalonAnalysisPage() {
     fetchBalance()
   }, [branch, endMonth])
 
-  // ========== ✅ 디자이너 데이터 불러오기 ==========
+  // ✅ 디자이너 급여 데이터 (Supabase 직접 조회)
   useEffect(() => {
     if (!branch || !startMonth || !endMonth) return
     const fetchDesigners = async () => {
@@ -135,7 +154,7 @@ export default function GPTSalonAnalysisPage() {
     fetchDesigners()
   }, [branch, startMonth, endMonth])
 
-  // ========== GPT 분석 요청 ==========
+  // ✅ GPT 분석 요청
   const handleAnalyze = async () => {
     if (!branch) return alert('지점을 선택하세요.')
     if (!startMonth || !endMonth) return alert('기간을 선택하세요.')
@@ -161,7 +180,7 @@ export default function GPTSalonAnalysisPage() {
         visitors_total: visitorsTotal,
         bank_inflow: bankInflow,
         cash_balance: cashBalance,
-        fixed_expense: expenseTotal, // ✅ 자동 집계 예정
+        fixed_expense: expenseTotal,
         variable_expense: 0,
         interns,
         prev_sales: prevSales,
@@ -171,9 +190,13 @@ export default function GPTSalonAnalysisPage() {
         current_reviews: currentReviews,
       }
 
+      const headers = await apiAuthHeader() // ✅ 추가
       const res = await fetch(`${API_BASE}/gpt/salon-analysis`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
         credentials: 'include',
         body: JSON.stringify(payload),
       })
@@ -188,6 +211,7 @@ export default function GPTSalonAnalysisPage() {
       setLoading(false)
     }
   }
+
 
   // ========== 렌더링 ==========
   return (
