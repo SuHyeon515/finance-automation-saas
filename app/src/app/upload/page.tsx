@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { api } from '@/lib/api'
+import { api, API_BASE } from '@/lib/api'
 
 export default function UploadPage() {
   const [branches, setBranches] = useState<string[]>([])
@@ -53,7 +53,7 @@ export default function UploadPage() {
 
     try {
       const token = await (await import('@/lib/api')).apiAuthHeader()
-      const res = await fetch(`${api.API_BASE}/upload`, {
+      const res = await fetch(`${API_BASE}/upload`, {
         method: 'POST',
         body: formData,
         headers: token,
