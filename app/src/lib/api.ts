@@ -99,3 +99,4 @@ export const api = {
       headers: { "Content-Type": "application/json" },
     }),
 };
+export { getToken as apiAuthHeader };
