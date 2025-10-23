@@ -1058,9 +1058,22 @@ class ReportRequest(BaseModel):
 @app.post("/reports")
 async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(None)):
     user_id = await get_user_id(authorization)
+    role = await get_role(user_id)
 
-    # === 데이터 가져오기 ===
-    data = supabase.table("transactions").select("*").eq("user_id", user_id).execute().data or []
+    # === ✅ [0] 역할에 따라 데이터 조회 ===
+    query = supabase.table("transactions").select("*")
+
+    if role in ["admin", "viewer"]:
+        # 🔹 admin/viewer는 지점(branch) 단위로 전체 데이터 조회
+        if req.branch:
+            query = query.eq("branch", req.branch)
+    else:
+        # 🔹 일반 user는 본인 데이터만
+        query = query.eq("user_id", user_id)
+        if req.branch:
+            query = query.eq("branch", req.branch)
+
+    data = query.execute().data or []
     df = pd.DataFrame(data)
 
     if df.empty:
@@ -1079,27 +1092,20 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
 
     # === ✅ [1] 기간 필터링 ===
     if req.granularity == "day" and req.start_date and req.end_date:
-        # 🔹 일별: 날짜 범위 기준
         start = pd.to_datetime(req.start_date)
         end = pd.to_datetime(req.end_date)
         df = df[(df["tx_date"] >= start) & (df["tx_date"] <= end)]
 
     elif req.granularity == "month" and req.start_month and req.end_month:
-        # 🔹 월별: 여러 달 범위 지원 (예: 8~9월)
         df = df[(df["tx_date"].dt.year == req.year) &
                 (df["tx_date"].dt.month >= req.start_month) &
                 (df["tx_date"].dt.month <= req.end_month)]
 
     else:
-        # 🔹 일반: 연도/월 단일 기준
         if req.year:
             df = df[df["tx_date"].dt.year == req.year]
         if req.month:
             df = df[df["tx_date"].dt.month == req.month]
-
-    # === 지점 필터 ===
-    if req.branch:
-        df = df[df["branch"] == req.branch]
 
     # === 정렬 ===
     df = df.sort_values("tx_date", ascending=False)
@@ -1138,7 +1144,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         df["period"] = (df["tx_date"] - pd.to_timedelta(df["tx_date"].dt.weekday, unit="D")).dt.strftime("%Y-%m-%d")
     elif req.granularity == "month":
         df["period"] = df["tx_date"].dt.strftime("%Y-%m")
-    else:  # day
+    else:
         df["period"] = df["tx_date"].dt.strftime("%Y-%m-%d")
 
     # === 기간별 합계 ===
@@ -1171,6 +1177,8 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         .to_dict("records")
     )
 
+    print(f"✅ [reports] user_id={user_id}, role={role}, branch={req.branch}, rows={len(df)}")
+
     return {
         "summary": summary,
         "by_category": by_category,
@@ -1179,41 +1187,6 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         "income_details": income_details,
         "expense_details": expense_details
     }
-
-
-@app.get("/analyses/meta")
-async def get_analyses_meta(
-    branch: str,
-    authorization: Optional[str] = Header(None)
-):
-    """
-    GET /analyses/meta?branch=동탄역점
-    👉 해당 유저 + 지점의 메타데이터 불러오기
-    """
-    user_id = await get_user_id(authorization)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    try:
-        # ✅ Supabase 요청
-        res = (
-            supabase.table("analyses_meta")
-            .select("*")
-            .eq("user_id", user_id)
-            .eq("branch", branch)
-            .maybe_single()
-            .execute()
-        )
-
-        # ✅ 안전 처리: None 방지
-        data = getattr(res, "data", None)
-
-        if data:
-            # ✅ 정상적으로 데이터가 존재할 경우 그대로 반환
-            return data
-        else:
-            # ✅ 데이터가 없을 경우 기본 구조 반환
-            return {"designers": [], "interns": 0, "visitors_total": 0}
 
     except Exception as e:
         # ✅ 에러 발생 시에도 안전하게 기본값 반환
