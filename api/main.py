@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from urllib.parse import quote
 from pydantic import BaseModel, field_validator
 import re
+from utils.auth import get_user_id, get_user_role  # ⚙️ get_user_role 추가 필요
 
 load_dotenv()
 
@@ -38,12 +39,15 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 app = FastAPI()
 # ✅ CORS 설정 — 프론트(Vercel) + 로컬환경 모두 허용
+
+origins = [
+    "https://finance-automation-saas-um91.vercel.app",
+    "http://localhost:3000"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://finance-automation-saas-um91.vercel.app",  # Vercel 배포 주소
-        "http://localhost:3000",                            # 로컬 개발용
-    ],
+    allow_origins=origins,       # ✅ 와일드카드 대신 명시
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -73,17 +77,40 @@ async def get_user_id(authorization: Optional[str]) -> str:
         return DEV_USER_ID
     raise HTTPException(status_code=401, detail='Missing Authorization Bearer token')
 
-async def get_role(user_id: str) -> str:
+async def get_user_role(authorization: Optional[str]) -> Optional[str]:
+    """JWT 토큰에서 role(admin/viewer/user)을 추출"""
+    if not authorization:
+        return None
     try:
-        res = supabase.table('profiles').select('id, role').eq('id', user_id).execute()
-        print(f"🧩 [get_role] user_id={user_id} → res.data={res.data}")
-
-        if res.data and res.data[0].get('role'):
-            return res.data[0]['role']
+        token = authorization.replace("Bearer ", "")
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload.get("role")
     except Exception as e:
-        print(f"⚠️ [get_role 오류]: {e}")
+        print("⚠️ get_user_role 오류:", e)
+        return None
 
-    return 'viewer'  # ❗ 기본값은 viewer로 두되, 로그로 확인
+# === Auth ===
+async def get_role(user_id: str) -> str:
+    """
+    Supabase profiles 테이블에서 role(admin/viewer/user) 조회.
+    service_role 키로 호출해 RLS 우회.
+    """
+    try:
+        # ✅ 서비스 키로 다시 클라이언트 생성 (RLS 무시)
+        admin = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        res = admin.table('profiles').select('role').eq('id', user_id).execute()
+
+        if res.data and len(res.data) > 0:
+            role = res.data[0].get('role', 'user')
+            print(f"✅ [get_role] user_id={user_id}, role={role}")
+            return role
+
+        print(f"⚠️ [get_role] user_id={user_id} 결과 없음")
+        return 'user'
+
+    except Exception as e:
+        print(f"❌ [get_role 오류]: {e}")
+        return 'user'
 
 # === Models ===
 class ReportFilter(BaseModel):
@@ -136,27 +163,38 @@ async def health():
 @app.get('/meta/branches')
 async def meta_branches(authorization: Optional[str] = Header(None)):
     user_id = await get_user_id(authorization)
+    role = await get_role(user_id)
     names = set()
 
     try:
-        # ① branches 테이블
-        res1 = supabase.table('branches').select('name').eq('user_id', user_id).execute()
-        for r in res1.data or []:
-            if r.get('name'):
-                names.add(r['name'])
-    except Exception as e:
-        print("⚠️ branches 조회 오류:", e)
+        if role in ['admin', 'viewer']:
+            res1 = supabase.table('branches').select('name').execute()
+            for r in res1.data or []:
+                if r.get('name'):
+                    names.add(r['name'])
+            
+            res2 = supabase.table('transactions').select('branch').neq('branch', '').execute()
+            for r in res2.data or []:
+                if r.get('branch'):
+                    names.add(r['branch'])
+        else:
+            res1 = supabase.table('branches').select('name').eq('user_id', user_id).execute()
+            for r in res1.data or []:
+                if r.get('name'):
+                    names.add(r['name'])
+            
+            res2 = supabase.table('transactions').select('branch').eq('user_id', user_id).neq('branch', '').execute()
+            for r in res2.data or []:
+                if r.get('branch'):
+                    names.add(r['branch'])
 
-    try:
-        # ② transactions 테이블
-        res2 = supabase.table('transactions').select('branch').eq('user_id', user_id).neq('branch', '').execute()
-        for r in res2.data or []:
-            if r.get('branch'):
-                names.add(r['branch'])
     except Exception as e:
-        print("⚠️ transactions 조회 오류:", e)
+        print(f"⚠️ branches 조회 오류: {e}")
 
+    # ✅ 항상 실행되도록 try 밖으로 이동
+    print(f"✅ [meta/branches] user_id={user_id}, role={role}, count={len(names)}, names={list(names)}")
     return sorted(list(names))
+
 @app.get('/me')
 async def me(authorization: Optional[str] = Header(None)):
     user_id = await get_user_id(authorization)
