@@ -1188,11 +1188,6 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         "expense_details": expense_details
     }
 
-    except Exception as e:
-        # ✅ 에러 발생 시에도 안전하게 기본값 반환
-        print("[❌ get_analyses_meta 오류 발생]", e)
-        return {"designers": [], "interns": 0, "visitors_total": 0}
-
 @app.post("/analyses/meta")
 async def save_analyses_meta(
     payload: dict,
