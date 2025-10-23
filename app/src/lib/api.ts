@@ -1,10 +1,10 @@
 // @ts-nocheck
-import { supabase } from "@/lib/supabaseClient"; // ✅ 기존 클라이언트 import
+import { supabase } from "@/lib/supabaseClient"; // ✅ Supabase 클라이언트 import
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "https://finance-automation-saas.onrender.com";
 
-// ✅ getToken() 그대로 유지
+// ✅ Supabase 세션에서 토큰 가져오기
 async function getToken() {
   if (typeof window === "undefined") return null;
   try {
@@ -12,7 +12,7 @@ async function getToken() {
     const token = data.session?.access_token;
     if (token) return token;
 
-    // fallback
+    // fallback (localStorage)
     const raw = localStorage.getItem("supabase.auth.token");
     if (raw) {
       const parsed = JSON.parse(raw);
@@ -27,7 +27,7 @@ async function getToken() {
   }
 }
 
-// ✅ 여기만 추가/수정
+// ✅ Authorization 헤더 생성
 export async function apiAuthHeader() {
   const token = await getToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -67,6 +67,7 @@ async function req(path: string, init: RequestInit = {}) {
 export const api = {
   me: () => req(`/me`),
   branches: () => req(`/meta/branches`),
+
   uploads: (params = {}) => {
     const q = new URLSearchParams(
       Object.entries(params)
@@ -75,7 +76,9 @@ export const api = {
     );
     return req(`/uploads${q.toString() ? `?${q}` : ""}`);
   },
+
   deleteUpload: (id) => req(`/uploads/${id}`, { method: "DELETE" }),
+
   unclassified: (params = {}) => {
     const q = new URLSearchParams(
       Object.entries(params)
@@ -84,19 +87,23 @@ export const api = {
     );
     return req(`/transactions/unclassified${q.toString() ? `?${q}` : ""}`);
   },
+
   categories: () => req(`/categories`),
+
   createCategory: (body) =>
     req(`/categories`, {
       method: "POST",
       body: JSON.stringify(body),
       headers: { "Content-Type": "application/json" },
     }),
+
   assign: (body) =>
     req(`/transactions/assign`, {
       method: "POST",
       body: JSON.stringify(body),
       headers: { "Content-Type": "application/json" },
     }),
+
   report: (body) =>
     req(`/reports`, {
       method: "POST",
@@ -104,4 +111,3 @@ export const api = {
       headers: { "Content-Type": "application/json" },
     }),
 };
-export { getToken as apiAuthHeader };
