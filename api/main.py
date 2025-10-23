@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from urllib.parse import quote
 from pydantic import BaseModel, field_validator
 import re
-from utils.auth import get_user_id, get_user_role  # ⚙️ get_user_role 추가 필요
+from utils import get_user_id, get_user_role  # ⚙️ get_user_role 추가 필요
 
 load_dotenv()
 
