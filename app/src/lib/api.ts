@@ -28,7 +28,7 @@ async function getToken() {
 }
 
 // ✅ Authorization 헤더 생성
-export async function apiAuthHeader() {
+export async function apiAuthHeader(): Promise<Record<string, string>> {
   const token = await getToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
