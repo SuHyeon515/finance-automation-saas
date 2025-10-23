@@ -4,23 +4,24 @@ import { supabase } from "@/lib/supabaseClient"; // ✅ 기존 클라이언트 i
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "https://finance-automation-saas.onrender.com";
 
-// ✅ Supabase 세션에서 토큰 안전하게 읽기
 async function getToken() {
   if (typeof window === "undefined") return null;
 
   try {
-    const session = (await supabase.auth.getSession()).data.session;
+    // 1️⃣ 우선 Supabase SDK로 세션 확인
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (token) return token;
 
-    // ✅ fallback: localStorage 직접 접근
-    if (!session) {
-      const raw = localStorage.getItem("supabase.auth.token");
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        return parsed?.currentSession?.access_token || null;
-      }
+    // 2️⃣ fallback - localStorage 직접 확인
+    const raw = localStorage.getItem("supabase.auth.token");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const fallbackToken = parsed?.currentSession?.access_token;
+      if (fallbackToken) return fallbackToken;
     }
 
-    return session?.access_token || null;
+    return null;
   } catch (e) {
     console.warn("⚠️ getToken() 실패:", e);
     return null;

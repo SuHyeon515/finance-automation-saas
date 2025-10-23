@@ -1,28 +1,27 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { API_BASE } from '@/lib/api'
+import { api } from '@/lib/api'
 
 export default function UploadPage() {
   const [branches, setBranches] = useState<string[]>([])
   const [branch, setBranch] = useState('')
-  const [customBranch, setCustomBranch] = useState('') // ✅ 직접입력용 상태
-  const [branchError, setBranchError] = useState('')   // ✅ 중복 경고 메시지
+  const [customBranch, setCustomBranch] = useState('')
+  const [branchError, setBranchError] = useState('')
   const [year, setYear] = useState(new Date().getFullYear())
   const [month, setMonth] = useState(new Date().getMonth() + 1)
   const [file, setFile] = useState<File | null>(null)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
 
-  // ✅ 업로드 가능한 지점 목록 로드
+  // ✅ 인증된 사용자 토큰을 이용해 branches 불러오기
   useEffect(() => {
-    fetch(`${API_BASE}/meta/branches`, { credentials: 'include' })
-      .then(r => r.json())
+    api.branches()
       .then(setBranches)
       .catch(() => setBranches([]))
   }, [])
 
-  // ✅ 직접입력 감시 → 중복 검사
+  // ✅ 중복 검사
   useEffect(() => {
     if (!customBranch.trim()) {
       setBranchError('')
@@ -53,15 +52,15 @@ export default function UploadPage() {
     setMessage('업로드 중...')
 
     try {
-      const res = await fetch(`${API_BASE}/upload`, {
+      const token = await (await import('@/lib/api')).apiAuthHeader()
+      const res = await fetch(`${api.API_BASE}/upload`, {
         method: 'POST',
         body: formData,
-        credentials: 'include',
+        headers: token,
       })
 
       if (!res.ok) throw new Error(await res.text())
 
-      // ✅ 엑셀 결과 파일 다운로드
       const blob = await res.blob()
       const cd = res.headers.get('Content-Disposition') || ''
       const match = cd.match(/filename="?([^"]+)"?/)
@@ -96,7 +95,7 @@ export default function UploadPage() {
             value={branch}
             onChange={e => {
               setBranch(e.target.value)
-              setCustomBranch('') // 드롭다운 선택 시 입력란 초기화
+              setCustomBranch('')
               setBranchError('')
             }}
             className="border rounded px-3 py-2 w-full mb-2"
@@ -109,27 +108,24 @@ export default function UploadPage() {
             ))}
           </select>
 
-          {/* ✅ 직접입력 칸 */}
           <input
             type="text"
             placeholder="지점명을 직접 입력하세요 (선택 대신)"
             value={customBranch}
             onChange={e => {
               setCustomBranch(e.target.value)
-              setBranch('') // 직접 입력 시 선택 초기화
+              setBranch('')
             }}
             className={`border rounded px-3 py-2 w-full text-sm text-gray-700 ${
               branchError ? 'border-red-400' : ''
             }`}
           />
 
-          {/* ✅ 중복 경고 표시 */}
           {branchError && (
             <p className="text-red-500 text-xs mt-1">{branchError}</p>
           )}
         </div>
 
-        {/* 연도 / 월 */}
         <div className="flex gap-4">
           <div className="flex-1">
             <label className="block text-sm mb-1">연도</label>
@@ -153,7 +149,6 @@ export default function UploadPage() {
           </div>
         </div>
 
-        {/* 파일 선택 */}
         <div>
           <label className="block text-sm mb-1">엑셀 파일 선택</label>
           <input
@@ -164,7 +159,6 @@ export default function UploadPage() {
           />
         </div>
 
-        {/* 버튼 */}
         <button
           disabled={loading}
           className="w-full bg-black text-white rounded py-2 hover:opacity-90"
@@ -173,14 +167,10 @@ export default function UploadPage() {
         </button>
       </form>
 
-      {/* 메시지 */}
       {message && <p className="text-center text-sm mt-2">{message}</p>}
 
       <div className="text-center mt-6">
-        <a
-          href="/uploads"
-          className="text-blue-600 hover:underline"
-        >
+        <a href="/uploads" className="text-blue-600 hover:underline">
           📋 업로드 내역 보기 →
         </a>
       </div>
