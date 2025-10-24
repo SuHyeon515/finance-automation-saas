@@ -849,6 +849,7 @@ async def create_rule(payload: RuleCreate, authorization: Optional[str] = Header
         'priority': payload.priority,
     }).execute()
     return {'ok': True}
+
 # === 거래 목록 조회 (미분류 + 분류 완료 포함) ===
 @app.get("/transactions/manage")
 async def list_transactions(
@@ -868,9 +869,11 @@ async def list_transactions(
         .eq("user_id", user_id)
     )
 
-    if branch:
-        q = q.ilike("branch", branch.strip())
+    # ✅ 브랜치 필터 (정확 일치 + 공백 제거)
+    if branch and branch.strip():
+        q = q.eq("branch", branch.strip())
 
+    # ✅ 연/월 필터
     if year and month:
         start = f"{year}-{month:02d}-01"
         end = f"{year + 1}-01-01" if month == 12 else f"{year}-{month + 1:02d}-01"
@@ -879,18 +882,18 @@ async def list_transactions(
         q = q.gte("tx_date", f"{year}-01-01").lt("tx_date", f"{year + 1}-01-01")
 
     q = q.order("tx_date", desc=True).range(offset, offset + limit - 1)
-    data = q.execute().data or []
+    result = q.execute()
 
+    data = result.data or []
+
+    # ✅ 데이터 후처리 (null-safe 변환)
     for row in data:
-        row["memo"] = row.get("memo", "") or ""
-        row["category"] = row.get("category", "") or ""
-        row["branch"] = row.get("branch", "") or ""
+        row["memo"] = row.get("memo") or ""
+        row["category"] = row.get("category") or "미분류"
+        row["branch"] = row.get("branch") or ""
 
-        val = row.get("is_fixed", False)
-        if isinstance(val, str):
-            row["is_fixed"] = val.lower() in ["true", "t", "1", "y"]
-        else:
-            row["is_fixed"] = bool(val)
+        val = row.get("is_fixed")
+        row["is_fixed"] = bool(val) if val is not None else False
 
     return {
         "items": data,
