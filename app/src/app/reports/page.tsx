@@ -1,10 +1,12 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE, apiAuthHeader } from '@/lib/api'
 import {
-  LineChart, Line, Tooltip, XAxis, YAxis, ResponsiveContainer, Legend, PieChart, Pie, Cell
+  LineChart, Line, Tooltip, XAxis, YAxis, ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts'
+import html2canvas from 'html2canvas'
+import jsPDF from 'jspdf'
 
 /* ===========================
    공용 포맷터
@@ -39,6 +41,8 @@ export default function ReportsPage() {
   const [endDate, setEndDate] = useState('')
   const [startMonth, setStartMonth] = useState(month)
   const [endMonth, setEndMonth] = useState(month)
+
+  const reportRef = useRef<HTMLDivElement>(null) // ✅ PDF 캡처 영역 참조
 
   /* ========== 초기 메타 ========== */
   useEffect(() => {
@@ -160,6 +164,31 @@ export default function ReportsPage() {
   const PIE_COLORS = ['#10b981', '#6366f1', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#f97316', '#22c55e', '#0ea5e9', '#eab308']
 
   /* ===========================
+     ✅ PDF 저장 기능
+  ============================ */
+  const handleDownloadPDF = async () => {
+    if (!reportRef.current) return
+    const element = reportRef.current
+    const canvas = await html2canvas(element, { scale: 2, useCORS: true })
+    const imgData = canvas.toDataURL('image/png')
+
+    const pdf = new jsPDF('p', 'mm', 'a4')
+    const pdfWidth = pdf.internal.pageSize.getWidth()
+    const pdfHeight = (canvas.height * pdfWidth) / canvas.width
+
+    let y = 0
+    while (y < pdfHeight) {
+      pdf.addImage(imgData, 'PNG', 0, -y, pdfWidth, pdfHeight)
+      if (y + pdf.internal.pageSize.getHeight() < pdfHeight)
+        pdf.addPage()
+      y += pdf.internal.pageSize.getHeight()
+    }
+
+    const filename = `${branch || '전체지점'}_${year}_${startMonth}~${endMonth}_리포트.pdf`
+    pdf.save(filename)
+  }
+
+  /* ===========================
      렌더링
   ============================ */
   return (
@@ -174,11 +203,7 @@ export default function ReportsPage() {
         <div className="flex flex-wrap gap-4 items-end">
           <div>
             <label className="block text-xs text-gray-500">지점</label>
-            <select
-              className="border rounded px-3 py-2"
-              value={branch}
-              onChange={e => setBranch(e.target.value)}
-            >
+            <select className="border rounded px-3 py-2" value={branch} onChange={e => setBranch(e.target.value)}>
               <option value="">전체</option>
               {branches.map(b => <option key={b}>{b}</option>)}
             </select>
@@ -186,21 +211,12 @@ export default function ReportsPage() {
 
           <div>
             <label className="block text-xs text-gray-500">연도</label>
-            <input
-              type="number"
-              className="border rounded px-3 py-2 w-24"
-              value={year}
-              onChange={e => setYear(Number(e.target.value))}
-            />
+            <input type="number" className="border rounded px-3 py-2 w-24" value={year} onChange={e => setYear(Number(e.target.value))} />
           </div>
 
           <div>
             <label className="block text-xs text-gray-500">보기 단위</label>
-            <select
-              className="border rounded px-3 py-2"
-              value={granularity}
-              onChange={e => setGranularity(e.target.value as 'day' | 'week' | 'month')}
-            >
+            <select className="border rounded px-3 py-2" value={granularity} onChange={e => setGranularity(e.target.value as any)}>
               <option value="day">일별</option>
               <option value="week">주별</option>
               <option value="month">월별</option>
@@ -222,9 +238,13 @@ export default function ReportsPage() {
             </>
           )}
 
-          <button onClick={loadReport}
-            className="ml-auto bg-black text-white rounded px-4 py-2 hover:opacity-80">
+          <button onClick={loadReport} className="ml-auto bg-black text-white rounded px-4 py-2 hover:opacity-80">
             조회
+          </button>
+
+          {/* ✅ PDF 다운로드 버튼 */}
+          <button onClick={handleDownloadPDF} className="bg-red-600 text-white rounded px-4 py-2 hover:opacity-80">
+            📄 PDF로 저장
           </button>
         </div>
 
@@ -240,6 +260,7 @@ export default function ReportsPage() {
           </div>
         )}
       </section>
+
 
       {loading && <p>⏳ 불러오는 중...</p>}
       {error && <p className="text-red-500">{error}</p>}
