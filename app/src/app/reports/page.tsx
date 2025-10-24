@@ -342,6 +342,7 @@ export default function ReportsPage() {
                     </tbody>
                   </table>
                 </div>
+              </div>
 
               {/* ✅ 라인그래프 + 거래 상세표 기존 유지 */}
               <div className="grid sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
