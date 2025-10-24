@@ -107,7 +107,6 @@ export default function ReportsPage() {
   const fixedRows = useMemo(() => data?.expense_details?.filter((r: any) => r.is_fixed) || [], [data])
   const variableRows = useMemo(() => data?.expense_details?.filter((r: any) => !r.is_fixed) || [], [data])
   const incomeRows = useMemo(() => data?.income_details || [], [data])
-  const totalIncome = Math.abs(data?.summary?.total_in || 0)
 
   const mergeUnclassified = (arr: any[], key: string) => {
     const grouped: Record<string, number> = {}
@@ -297,15 +296,17 @@ export default function ReportsPage() {
                                 <tr key={i}>
                                   <td className="p-2 border text-gray-800">{r.category}</td>
                                   <td className="p-2 border text-right text-gray-500">{percent.toFixed(2)}%</td>
-                                  <td className={`p-2 border text-right ${blk.tableColor}`}>{formatCurrency(r.amount)}</td>
+                                  <td className={`p-2 border text-right ${blk.tableColor}`}>
+                                    {formatCurrency(r.amount)}
+                                  </td>
                                 </tr>
                               )
                             })}
                             <tr className="bg-gray-100 font-semibold">
                               <td className="p-2 border text-gray-900">합계</td>
                               <td className="p-2 border text-right text-gray-700">100.00%</td>
-                              <td className="p-2 border text-right text-green-600">
-                                {formatCurrency(totalIncome)}
+                              <td className={`p-2 border text-right ${blk.tableColor}`}>
+                                {formatCurrency(total)}
                               </td>
                             </tr>
                           </>
