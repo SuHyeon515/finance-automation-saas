@@ -132,42 +132,52 @@ export default function ReportsPage() {
      ✅ PDF 전체 페이지 캡처 버전
   ============================ */
   const handleDownloadPDF = async () => {
-    if (!reportRef.current) return;
+  if (typeof window === 'undefined') return;
+  if (!reportRef.current) return;
 
-    // 🧩 브라우저 환경에서만 import (SSR 방지)
-    const html2pdf = (await import('html2pdf.js')).default;
+  // ✅ 브라우저 환경에서만 import
+  const html2pdf = (await import('html2pdf.js')).default;
+  const html2canvas = (await import('html2canvas')).default;
 
-    window.scrollTo(0, 0);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-
-    const element = reportRef.current;
-    const title = `${branch || '전체지점'} 리포트`;
-    const fileName = `${title}_${year}_${startMonth}~${endMonth}.pdf`;
-
-    const opt: any = {
-      margin: [10, 15, 10, 15] as [number, number, number, number],
-      filename: fileName,
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: '#ffffff',
-        scrollY: 0,
-      },
-      jsPDF: {
-        unit: 'mm',
-        format: 'a4',
-        orientation: 'p',
-      },
-      pagebreak: {
-        mode: ['css', 'legacy'],
-        avoid: ['tr', 'table', 'section'],
-      },
+  // ✅ 차트 렌더링 대기
+  const waitForCharts = () => new Promise<void>(resolve => {
+    const check = () => {
+      const charts = document.querySelectorAll('canvas');
+      if (charts.length > 0 && Array.from(charts).every(c => c.height > 0)) resolve();
+      else setTimeout(check, 500);
     };
+    check();
+  });
+  await waitForCharts();
 
-    // @ts-ignore
-    await html2pdf().from(element).set(opt).save();
+  window.scrollTo(0, 0);
+
+  const element = reportRef.current;
+  const title = `${branch || '전체지점'} 리포트`;
+  const fileName = `${title}_${year}_${startMonth}~${endMonth}.pdf`;
+
+  const opt: any = {
+    margin: [10, 15, 10, 15] as [number, number, number, number],
+    filename: fileName,
+    image: { type: 'jpeg', quality: 0.98 },
+    html2canvas: {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      scrollY: 0,
+      windowWidth: document.documentElement.scrollWidth,
+      windowHeight: document.documentElement.scrollHeight,
+    },
+    jsPDF: { unit: 'mm', format: 'a4', orientation: 'p' },
+    pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', 'table', 'section'] },
   };
+
+  // ✅ html2canvas도 강제로 사용
+  (window as any).html2canvas = html2canvas;
+
+  // @ts-ignore
+  await html2pdf().from(element).set(opt).save();
+};
 
   /* ===========================
      렌더링
