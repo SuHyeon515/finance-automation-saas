@@ -1110,18 +1110,18 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     user_id = await get_user_id(authorization)
     role = await get_role(user_id)
 
-    # === ✅ [0] 역할에 따라 데이터 조회 ===
+    # === ✅ [0] 역할별 데이터 접근 ===
     query = supabase.table("transactions").select("*")
 
     if role in ["admin", "viewer"]:
-        # 🔹 admin/viewer는 지점(branch) 단위로 전체 데이터 조회
-        if req.branch:
-            query = query.eq("branch", req.branch)
+        # 🔹 admin/viewer: 모든 지점 가능
+        if req.branch and req.branch.strip():
+            query = query.eq("branch", req.branch.strip())
     else:
-        # 🔹 일반 user는 본인 데이터만
+        # 🔹 일반 user: 본인 데이터만
         query = query.eq("user_id", user_id)
-        if req.branch:
-            query = query.eq("branch", req.branch)
+        if req.branch and req.branch.strip():
+            query = query.eq("branch", req.branch.strip())
 
     data = query.execute().data or []
     df = pd.DataFrame(data)
@@ -1136,50 +1136,70 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
             "expense_details": []
         }
 
-    # === 날짜 변환 ===
+    # === ✅ 날짜 변환
     df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce")
     df = df.dropna(subset=["tx_date"])
 
     # === ✅ [1] 기간 필터링 ===
+    if req.start_month and req.end_month:
+        try:
+            start_m = int(req.start_month)
+            end_m = int(req.end_month)
+        except:
+            start_m = req.start_month
+            end_m = req.end_month
+
+        df = df[
+            (df["tx_date"].dt.year == req.year)
+            & (df["tx_date"].dt.month >= start_m)
+            & (df["tx_date"].dt.month <= end_m)
+        ]
+    elif req.year:
+        df = df[df["tx_date"].dt.year == req.year]
+
     if req.granularity == "day" and req.start_date and req.end_date:
         start = pd.to_datetime(req.start_date)
         end = pd.to_datetime(req.end_date)
         df = df[(df["tx_date"] >= start) & (df["tx_date"] <= end)]
 
-    elif req.granularity == "month" and req.start_month and req.end_month:
-        df = df[(df["tx_date"].dt.year == req.year) &
-                (df["tx_date"].dt.month >= req.start_month) &
-                (df["tx_date"].dt.month <= req.end_month)]
-
-    else:
-        if req.year:
-            df = df[df["tx_date"].dt.year == req.year]
-        if req.month:
-            df = df[df["tx_date"].dt.month == req.month]
-
-    # === 정렬 ===
+    # === ✅ 정렬
     df = df.sort_values("tx_date", ascending=False)
 
-    # === 기본 통계 ===
+    # === ✅ 기본 통계 ===
     total_in = df[df["amount"] > 0]["amount"].sum()
     total_out = df[df["amount"] < 0]["amount"].sum()
     summary = {
         "total_in": float(total_in),
         "total_out": float(total_out),
-        "net": float(total_in + total_out)
+        "net": float(total_in + total_out),
     }
 
-    # === 카테고리별 ===
-    by_category = (
-        df.groupby("category", dropna=False)["amount"]
+    # === ✅ 카테고리별 (수입/지출 구분)
+    df["category"] = df["category"].fillna("미분류")
+    by_category_in = (
+        df[df["amount"] > 0]
+        .groupby("category", dropna=False)["amount"]
         .sum()
         .reset_index()
         .rename(columns={"amount": "sum"})
-        .fillna({"category": "미분류"})
         .to_dict("records")
     )
 
-    # === 고정/변동별 ===
+    by_category_out = (
+        df[df["amount"] < 0]
+        .groupby("category", dropna=False)["amount"]
+        .sum()
+        .reset_index()
+        .rename(columns={"amount": "sum"})
+        .to_dict("records")
+    )
+
+    by_category = {
+        "income": by_category_in,
+        "expense": by_category_out
+    }
+
+    # === ✅ 고정/변동별 ===
     df["is_fixed"] = df.get("is_fixed", False)
     by_fixed = (
         df.groupby("is_fixed")["amount"]
@@ -1197,7 +1217,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     else:
         df["period"] = df["tx_date"].dt.strftime("%Y-%m-%d")
 
-    # === 기간별 합계 ===
+    # === ✅ 기간별 합계 ===
     by_period = (
         df.groupby("period")
         .agg(
@@ -1205,14 +1225,14 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
             total_out=("amount", lambda x: x[x < 0].sum()),
             fixed_out=("amount", lambda x: x[(x < 0) & (df.loc[x.index, "is_fixed"] == True)].sum()),
             variable_out=("amount", lambda x: x[(x < 0) & (df.loc[x.index, "is_fixed"] == False)].sum()),
-            net=("amount", "sum")
+            net=("amount", "sum"),
         )
         .reset_index()
         .sort_values("period")
         .to_dict("records")
     )
 
-    # === 상세 내역 ===
+    # === ✅ 상세 내역 ===
     income_details = (
         df[df["amount"] > 0]
         .sort_values("tx_date", ascending=False)
@@ -1237,7 +1257,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         "by_fixed": by_fixed,
         "by_period": by_period,
         "income_details": income_details,
-        "expense_details": expense_details
+        "expense_details": expense_details,
     }
 
 
