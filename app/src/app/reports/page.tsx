@@ -132,53 +132,52 @@ export default function ReportsPage() {
      ✅ PDF 전체 페이지 캡처 버전
   ============================ */
   const handleDownloadPDF = async () => {
-    if (!reportRef.current) return
+    if (!reportRef.current) return;
 
-    // 🔹 1. 스크롤 맨 위로 이동 (캡처 누락 방지)
-    window.scrollTo(0, 0)
+    // 스크롤 상단으로
+    window.scrollTo(0, 0);
 
-    // 🔹 2. 모든 렌더링 완료 대기 (차트/SVG)
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    // 렌더링 완료 대기 (차트 포함)
+    await new Promise(resolve => setTimeout(resolve, 1500));
 
-    const element = reportRef.current
-    const pdf = new jsPDF('p', 'mm', 'a4')
-    const pdfWidth = pdf.internal.pageSize.getWidth()
-    const pdfHeight = pdf.internal.pageSize.getHeight()
+    const pdf = new jsPDF('p', 'mm', 'a4');
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = pdf.internal.pageSize.getHeight();
 
-    const canvas = await html2canvas(element, {
-      scale: 2,
-      useCORS: true,
-      backgroundColor: '#ffffff',
-    })
+    const title = `${branch || '전체지점'} 리포트`;
+    const dateRange = `${year}년 ${startMonth}월 ~ ${endMonth}월`;
+    const created = `생성일자: ${new Date().toLocaleDateString()}`;
 
-    const imgData = canvas.toDataURL('image/jpeg', 0.95)
-    const imgWidth = pdfWidth
-    const imgHeight = (canvas.height * pdfWidth) / canvas.width
+    // reportRef 안의 모든 section 개별 캡처
+    const sections = Array.from(reportRef.current.querySelectorAll('section'));
+    for (let i = 0; i < sections.length; i++) {
+      const el = sections[i];
+      const canvas = await html2canvas(el, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        logging: false,
+      });
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      const imgWidth = pdfWidth;
+      const imgHeight = (canvas.height * pdfWidth) / canvas.width;
 
-    let heightLeft = imgHeight
-    let position = 0
+      if (i > 0) pdf.addPage();
 
-    const title = `${branch || '전체지점'} 리포트`
-    const dateRange = `${year}년 ${startMonth}월 ~ ${endMonth}월`
-    const created = `생성일자: ${new Date().toLocaleDateString()}`
+      // 헤더
+      pdf.setFontSize(14);
+      pdf.text(`📊 ${title}`, 10, 15);
+      pdf.setFontSize(10);
+      pdf.text(dateRange, 10, 22);
+      pdf.text(created, 10, 28);
 
-    while (heightLeft > 0) {
-      pdf.setFontSize(14)
-      pdf.text(`📊 ${title}`, 10, 15)
-      pdf.setFontSize(10)
-      pdf.text(dateRange, 10, 22)
-      pdf.text(created, 10, 28)
-
-      pdf.addImage(imgData, 'JPEG', 0, position - 30, imgWidth, imgHeight)
-      heightLeft -= pdfHeight
-      position -= pdfHeight
-
-      if (heightLeft > 0) pdf.addPage()
+      // 본문 이미지
+      pdf.addImage(imgData, 'JPEG', 0, 35, imgWidth, imgHeight);
     }
 
-    pdf.save(`${title}_${year}_${startMonth}~${endMonth}.pdf`)
-  }
-
+    pdf.save(`${title}_${year}_${startMonth}~${endMonth}.pdf`);
+  };
+  
   /* ===========================
      렌더링
   ============================ */
