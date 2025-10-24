@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { API_BASE, apiAuthHeader } from '@/lib/api'
-
 import {
   LineChart, Line, Tooltip, XAxis, YAxis, ResponsiveContainer, Legend, PieChart, Pie, Cell
 } from 'recharts'
@@ -35,7 +34,6 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // 보기 단위
   const [granularity, setGranularity] = useState<'day' | 'week' | 'month'>('month')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
@@ -85,11 +83,11 @@ export default function ReportsPage() {
     setLoading(true)
     setError('')
     try {
-      const headers = await apiAuthHeader()  // ✅ 토큰 헤더 가져오기 추가
+      const headers = await apiAuthHeader()
       const res = await fetch(`${API_BASE}/reports`, {
         method: 'POST',
         headers: {
-          ...headers,                         // ✅ Authorization 헤더 추가
+          ...headers,
           'Content-Type': 'application/json',
         },
         credentials: 'include',
@@ -126,7 +124,6 @@ export default function ReportsPage() {
   )
   const incomeRows = useMemo(() => data?.income_details || [], [data])
 
-  // “미분류” 병합
   const mergeUnclassified = (arr: any[], key: string) => {
     const grouped: Record<string, number> = {}
     arr.forEach((r: any) => {
@@ -136,7 +133,6 @@ export default function ReportsPage() {
     return Object.entries(grouped).map(([category, amount]) => ({ category, amount }))
   }
 
-  // 카테고리별 날짜별 그래프용 데이터
   const groupByCategoryAndDate = (rows: any[], dateKey: string, amountKey: string) => {
     const grouped: Record<string, Record<string, number>> = {}
     rows.forEach(r => {
@@ -211,27 +207,6 @@ export default function ReportsPage() {
             </select>
           </div>
 
-          {granularity === 'day' && (
-            <>
-              <div>
-                <label className="block text-xs text-gray-500">시작일</label>
-                <input type="date" className="border rounded px-3 py-2" value={startDate} onChange={e => setStartDate(e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500">종료일</label>
-                <input type="date" className="border rounded px-3 py-2" value={endDate} onChange={e => setEndDate(e.target.value)} />
-              </div>
-            </>
-          )}
-
-          {granularity === 'week' && (
-            <div>
-              <label className="block text-xs text-gray-500">월</label>
-              <input type="number" min={1} max={12} className="border rounded px-3 py-2 w-20"
-                     value={month} onChange={e => setMonth(Number(e.target.value))} />
-            </div>
-          )}
-
           {granularity === 'month' && (
             <>
               <div>
@@ -247,10 +222,8 @@ export default function ReportsPage() {
             </>
           )}
 
-          <button
-            onClick={loadReport}
-            className="ml-auto bg-black text-white rounded px-4 py-2 hover:opacity-80"
-          >
+          <button onClick={loadReport}
+            className="ml-auto bg-black text-white rounded px-4 py-2 hover:opacity-80">
             조회
           </button>
         </div>
@@ -268,37 +241,13 @@ export default function ReportsPage() {
         )}
       </section>
 
-      {/* === 로딩/에러 === */}
       {loading && <p>⏳ 불러오는 중...</p>}
       {error && <p className="text-red-500">{error}</p>}
 
       {/* === 본문 === */}
       {data && (
         <div className="space-y-10">
-          {/* ✅ 기간별 수입/지출/순이익 흐름 그래프 */}
-          {data?.by_period?.length > 0 && (
-            <section className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
-              <h2 className="text-lg font-semibold text-gray-800">
-                📊 {granularity === 'day' ? '일별' : granularity === 'week' ? '주별' : '월별'} 수입/지출 추이
-              </h2>
-
-              <div className="h-[320px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={data.by_period}>
-                    <XAxis dataKey="period" tick={{ fontSize: 10 }} />
-                    <YAxis tickFormatter={(v: number) => v.toLocaleString()} />
-                    <Tooltip formatter={(v: number) => `${v.toLocaleString()}원`} labelFormatter={(label) => `기간: ${label}`} />
-                    <Legend />
-                    <Line type="monotone" dataKey="total_in" name="수입" stroke="#22c55e" dot={false} />
-                    <Line type="monotone" dataKey="total_out" name="지출" stroke="#ef4444" dot={false} />
-                    <Line type="monotone" dataKey="net" name="순이익" stroke="#3b82f6" dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </section>
-          )}
-
-          {/* ✅ 수입 / 고정지출 / 변동지출 */}
+          {/* 수입/고정/변동지출 섹션 */}
           {[
             {
               title: '📈 수입',
@@ -333,13 +282,14 @@ export default function ReportsPage() {
             <section key={idx} className="bg-white rounded-xl border shadow-sm p-6 space-y-6">
               <h2 className={`text-xl font-semibold ${blk.colorText}`}>{blk.title}</h2>
 
-              {/* ✅ 파이차트 */}
-              <div className="w-full flex justify-center">
-                <div className="h-[260px] w-full max-w-[400px]">
-                  <ResponsiveContainer width="100%" height="100%">
+              {/* ✅ 파이차트 + 표 2단 구성 */}
+              <div className="flex flex-col md:flex-row items-start gap-6">
+                {/* 왼쪽 파이차트 */}
+                <div className="flex-1">
+                  <ResponsiveContainer width="100%" height={300}>
                     <PieChart>
                       <Pie
-                        data={blk.chartData.map((d: any) => ({ name: d.category, value: d.amount }))}
+                        data={blk.chartData.map(d => ({ name: d.category, value: d.amount }))}
                         dataKey="value"
                         nameKey="name"
                         outerRadius={110}
@@ -353,9 +303,35 @@ export default function ReportsPage() {
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
+
+                {/* 오른쪽 요약표 */}
+                <div className="flex-1 overflow-x-auto">
+                  <table className="w-full text-sm border border-gray-200 rounded-lg">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="p-2 border">분류</th>
+                        <th className="p-2 border text-right">비율</th>
+                        <th className="p-2 border text-right">금액</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {blk.chartData.map((r: any, i: number) => {
+                        const total = blk.chartData.reduce((s: number, v: any) => s + v.amount, 0)
+                        const percent = total ? (r.amount / total) * 100 : 0
+                        return (
+                          <tr key={i}>
+                            <td className="p-2 border text-gray-800">{r.category}</td>
+                            <td className="p-2 border text-right text-gray-500">{percent.toFixed(2)}%</td>
+                            <td className={`p-2 border text-right ${blk.tableColor}`}>{formatCurrency(r.amount)}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
-              {/* ✅ 카테고리별 라인 그래프 */}
+              {/* ✅ 라인그래프 + 거래 상세표 기존 유지 */}
               <div className="grid sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {Object.entries(groupByCategoryAndDate(blk.rows, 'tx_date', 'amount')).map(([category, items], j) => (
                   <div key={j} className="p-3 bg-gray-50 border rounded-lg">
@@ -374,7 +350,7 @@ export default function ReportsPage() {
                 ))}
               </div>
 
-              {/* ✅ 표 */}
+              {/* ✅ 거래 상세 표 */}
               <div className="overflow-x-auto">
                 <table className="w-full text-sm border border-gray-200 rounded-lg">
                   <thead className="bg-gray-50">
