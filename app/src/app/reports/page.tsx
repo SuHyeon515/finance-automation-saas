@@ -42,7 +42,7 @@ export default function ReportsPage() {
   const [startMonth, setStartMonth] = useState(month)
   const [endMonth, setEndMonth] = useState(month)
 
-  const reportRef = useRef<HTMLDivElement>(null) // ✅ PDF 캡처 영역 참조
+  const reportRef = useRef<HTMLDivElement>(null)
 
   /* ========== 초기 메타 ========== */
   useEffect(() => {
@@ -56,8 +56,7 @@ export default function ReportsPage() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const json = await res.json()
         setBranches(Array.isArray(json) ? json : [])
-      } catch (e) {
-        console.warn('branches 불러오기 실패:', e)
+      } catch {
         setBranches([])
       }
     }
@@ -100,7 +99,7 @@ export default function ReportsPage() {
       if (!res.ok) throw new Error(await res.text())
       const result = await res.json()
 
-      result.by_category = Array.isArray(result.by_category) ? result.by_category : []
+      result.by_category = result.by_category || []
       result.expense_details = result.expense_details || []
       result.income_details = result.income_details || []
       result.by_period = result.by_period || []
@@ -164,28 +163,41 @@ export default function ReportsPage() {
   const PIE_COLORS = ['#10b981', '#6366f1', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#f97316', '#22c55e', '#0ea5e9', '#eab308']
 
   /* ===========================
-     ✅ PDF 저장 기능
+     ✅ PDF 저장 기능 (개선버전)
   ============================ */
   const handleDownloadPDF = async () => {
     if (!reportRef.current) return
-    const element = reportRef.current
-    const canvas = await html2canvas(element, { scale: 3, useCORS: true })
-    const imgData = canvas.toDataURL('image/png')
 
     const pdf = new jsPDF('p', 'mm', 'a4')
     const pdfWidth = pdf.internal.pageSize.getWidth()
-    const pdfHeight = (canvas.height * pdfWidth) / canvas.width
+    const pdfHeight = pdf.internal.pageSize.getHeight()
+    const children = Array.from(reportRef.current.children)
 
-    let y = 0
-    while (y < pdfHeight) {
-      pdf.addImage(imgData, 'PNG', 0, -y, pdfWidth, pdfHeight)
-      if (y + pdf.internal.pageSize.getHeight() < pdfHeight)
-        pdf.addPage()
-      y += pdf.internal.pageSize.getHeight()
+    const title = `${branch || '전체지점'} 리포트`
+    const dateRange = `${year}년 ${startMonth}월 ~ ${endMonth}월`
+    const created = `생성일자: ${new Date().toLocaleDateString()}`
+
+    for (let i = 0; i < children.length; i++) {
+      const el = children[i] as HTMLElement
+      const canvas = await html2canvas(el, { scale: 3, useCORS: true })
+      const imgData = canvas.toDataURL('image/png')
+      const imgHeight = (canvas.height * pdfWidth) / canvas.width
+
+      // 상단 헤더
+      pdf.setFontSize(14)
+      pdf.text(`📊 ${title}`, 10, 15)
+      pdf.setFontSize(10)
+      pdf.text(dateRange, 10, 22)
+      pdf.text(created, 10, 28)
+
+      pdf.addImage(imgData, 'PNG', 0, 35, pdfWidth, imgHeight)
+      pdf.setFontSize(10)
+      pdf.text(`Page ${i + 1}`, pdfWidth - 25, pdfHeight - 10)
+
+      if (i < children.length - 1) pdf.addPage()
     }
 
-    const filename = `${branch || '전체지점'}_${year}_${startMonth}~${endMonth}_리포트.pdf`
-    pdf.save(filename)
+    pdf.save(`${title}_${year}_${startMonth}~${endMonth}.pdf`)
   }
 
   /* ===========================
@@ -242,13 +254,11 @@ export default function ReportsPage() {
             조회
           </button>
 
-          {/* ✅ PDF 다운로드 버튼 */}
           <button onClick={handleDownloadPDF} className="bg-red-600 text-white rounded px-4 py-2 hover:opacity-80">
             📄 PDF로 저장
           </button>
         </div>
 
-        {/* KPI 카드 */}
         {data && (
           <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
             {stats.map((s, i) => (
@@ -261,61 +271,27 @@ export default function ReportsPage() {
         )}
       </section>
 
-
       {loading && <p>⏳ 불러오는 중...</p>}
       {error && <p className="text-red-500">{error}</p>}
 
       {/* === 본문 === */}
       {data && (
         <div ref={reportRef} className="space-y-10">
-          {/* 수입/고정/변동지출 섹션 */}
           {[
-            {
-              title: '📈 수입',
-              colorText: 'text-green-700',
-              stroke: '#16a34a',
-              rows: incomeRows,
-              chartData: mergeUnclassified(
-                (data?.by_category || [])
-                  .filter((v: any) => v.sum > 0)
-                  .map((v: any) => ({ category: v.category || '미분류', amount: v.sum })),
-                'category'
-              ),
-              tableColor: 'text-green-600'
-            },
-            {
-              title: '🏠 고정지출',
-              colorText: 'text-indigo-700',
-              stroke: '#4f46e5',
-              rows: fixedRows,
-              chartData: mergeUnclassified(fixedRows, 'category'),
-              tableColor: 'text-indigo-600'
-            },
-            {
-              title: '🚗 변동지출',
-              colorText: 'text-orange-700',
-              stroke: '#f97316',
-              rows: variableRows,
-              chartData: mergeUnclassified(variableRows, 'category'),
-              tableColor: 'text-orange-600'
-            }
+            { title: '📈 수입', colorText: 'text-green-700', stroke: '#16a34a', rows: incomeRows, chartData: mergeUnclassified((data?.by_category || []).filter((v: any) => v.sum > 0).map((v: any) => ({ category: v.category || '미분류', amount: v.sum })), 'category'), tableColor: 'text-green-600' },
+            { title: '🏠 고정지출', colorText: 'text-indigo-700', stroke: '#4f46e5', rows: fixedRows, chartData: mergeUnclassified(fixedRows, 'category'), tableColor: 'text-indigo-600' },
+            { title: '🚗 변동지출', colorText: 'text-orange-700', stroke: '#f97316', rows: variableRows, chartData: mergeUnclassified(variableRows, 'category'), tableColor: 'text-orange-600' }
           ].map((blk, idx) => (
             <section key={idx} className="bg-white rounded-xl border shadow-sm p-6 space-y-6">
               <h2 className={`text-xl font-semibold ${blk.colorText}`}>{blk.title}</h2>
 
               {/* ✅ 파이차트 + 표 2단 구성 */}
               <div className="flex flex-col md:flex-row items-start gap-6">
-                {/* 왼쪽 파이차트 */}
                 <div className="flex-1">
                   <ResponsiveContainer width="100%" height={300}>
                     <PieChart>
-                      <Pie
-                        data={blk.chartData.map(d => ({ name: d.category, value: d.amount }))}
-                        dataKey="value"
-                        nameKey="name"
-                        outerRadius={110}
-                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                      >
+                      <Pie data={blk.chartData.map(d => ({ name: d.category, value: d.amount }))} dataKey="value" nameKey="name" outerRadius={110}
+                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
                         {blk.chartData.map((_: any, i: number) => (
                           <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                         ))}
@@ -325,7 +301,6 @@ export default function ReportsPage() {
                   </ResponsiveContainer>
                 </div>
 
-                {/* 오른쪽 요약표 */}
                 <div className="flex-1 overflow-x-auto">
                   <table className="w-full text-sm border border-gray-200 rounded-lg">
                     <thead className="bg-gray-50">
@@ -350,8 +325,6 @@ export default function ReportsPage() {
                                 </tr>
                               )
                             })}
-
-                            {/* ✅ 총합 행 */}
                             <tr className="bg-gray-100 font-semibold">
                               <td className="p-2 border text-gray-900">합계</td>
                               <td className="p-2 border text-right text-gray-700">100.00%</td>
@@ -365,7 +338,7 @@ export default function ReportsPage() {
                 </div>
               </div>
 
-              {/* ✅ 라인그래프 + 거래 상세표 기존 유지 */}
+              {/* ✅ 라인그래프 + 거래 상세표 */}
               <div className="grid sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {Object.entries(groupByCategoryAndDate(blk.rows, 'tx_date', 'amount')).map(([category, items], j) => (
                   <div key={j} className="p-3 bg-gray-50 border rounded-lg">
@@ -384,7 +357,6 @@ export default function ReportsPage() {
                 ))}
               </div>
 
-              {/* ✅ 거래 상세 표 */}
               <div className="overflow-x-auto">
                 <table className="w-full text-sm border border-gray-200 rounded-lg">
                   <thead className="bg-gray-50">
