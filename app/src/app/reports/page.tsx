@@ -2,12 +2,16 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE, apiAuthHeader } from '@/lib/api'
-import dynamic from 'next/dynamic' // 🔹 동적 import
+import dynamic from 'next/dynamic'
 import {
-  LineChart, Line, Tooltip, XAxis, YAxis, ResponsiveContainer, PieChart, Pie, Cell
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Tooltip,
 } from 'recharts'
 
-// 🔹 PDF 버튼 (SSR 비활성화)
+// ✅ PDF 버튼 (SSR 비활성화)
 const ReportPDFButton = dynamic(() => import('@/components/ReportPDFButton'), { ssr: false })
 
 // ============================
@@ -16,17 +20,8 @@ const ReportPDFButton = dynamic(() => import('@/components/ReportPDFButton'), { 
 const formatCurrency = (n: number) =>
   (n ?? 0).toLocaleString('ko-KR', { style: 'currency', currency: 'KRW' })
 
-const formatShortNumber = (num: number) => {
-  if (num == null) return '0'
-  const abs = Math.abs(num)
-  if (abs >= 1_000_000_000) return (num / 1_000_000_000).toFixed(1) + 'B'
-  if (abs >= 1_000_000) return (num / 1_000_000).toFixed(1) + 'M'
-  if (abs >= 1_000) return (num / 1_000).toFixed(1) + 'K'
-  return String(num)
-}
-
 // ============================
-// 리포트 메인 페이지
+// 리포트 페이지
 // ============================
 export default function ReportsPage() {
   const now = new Date()
@@ -109,23 +104,6 @@ export default function ReportsPage() {
       grouped[cat] = (grouped[cat] || 0) + Math.abs(r.amount || r.sum || 0)
     })
     return Object.entries(grouped).map(([category, amount]) => ({ category, amount }))
-  }
-
-  const groupByCategoryAndDate = (rows: any[], dateKey: string, amountKey: string) => {
-    const grouped: Record<string, Record<string, number>> = {}
-    rows.forEach(r => {
-      const category = r.category || '미분류'
-      const date = new Date(r[dateKey]).toISOString().split('T')[0]
-      grouped[category] ??= {}
-      grouped[category][date] = (grouped[category][date] || 0) + Math.abs(r[amountKey] || 0)
-    })
-    const result: Record<string, { date: string; amount: number }[]> = {}
-    Object.entries(grouped).forEach(([cat, dateObj]) => {
-      result[cat] = Object.entries(dateObj)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([date, amount]) => ({ date, amount }))
-    })
-    return result
   }
 
   const stats = [
@@ -233,63 +211,26 @@ export default function ReportsPage() {
       {error && <p className="text-red-500">{error}</p>}
 
       {data && (
-        <div id="report-container" ref={reportRef} className="space-y-10 bg-white p-6 rounded-xl">
+        <div
+          id="report-container"
+          ref={reportRef}
+          className="bg-white p-6 rounded-xl space-y-10"
+          style={{ minWidth: '210mm', maxWidth: '210mm', margin: '0 auto' }}
+        >
           {[
-            {
-              title: '📈 수입',
-              colorText: 'text-green-700',
-              stroke: '#16a34a',
-              rows: incomeRows,
-              chartData: mergeUnclassified(
-                (data?.by_category || [])
-                  .filter((v: any) => v.sum > 0)
-                  .map((v: any) => ({
-                    category: v.category || '미분류',
-                    amount: v.sum,
-                  })),
-                'category'
-              ),
-              tableColor: 'text-green-600',
-            },
-            {
-              title: '🏠 고정지출',
-              colorText: 'text-indigo-700',
-              stroke: '#4f46e5',
-              rows: fixedRows,
-              chartData: mergeUnclassified(fixedRows, 'category'),
-              tableColor: 'text-indigo-600',
-            },
-            {
-              title: '🚗 변동지출',
-              colorText: 'text-orange-700',
-              stroke: '#f97316',
-              rows: variableRows,
-              chartData: mergeUnclassified(variableRows, 'category'),
-              tableColor: 'text-orange-600',
-            },
+            { title: '📈 수입', colorText: 'text-green-700', rows: incomeRows, chartData: mergeUnclassified((data?.by_category || []).filter((v: any) => v.sum > 0).map((v: any) => ({ category: v.category || '미분류', amount: v.sum })), 'category'), tableColor: 'text-green-600' },
+            { title: '🏠 고정지출', colorText: 'text-indigo-700', rows: fixedRows, chartData: mergeUnclassified(fixedRows, 'category'), tableColor: 'text-indigo-600' },
+            { title: '🚗 변동지출', colorText: 'text-orange-700', rows: variableRows, chartData: mergeUnclassified(variableRows, 'category'), tableColor: 'text-orange-600' },
           ].map((blk, idx) => (
-            <section
-              key={idx}
-              className="bg-white border rounded-xl shadow-sm p-6 space-y-6"
-            >
+            <section key={idx} className="bg-white border rounded-xl shadow-sm p-6 space-y-6">
               <h2 className={`text-xl font-semibold ${blk.colorText}`}>{blk.title}</h2>
 
               <div className="flex flex-col md:flex-row items-start gap-6">
                 <div className="flex-1">
                   <ResponsiveContainer width="100%" height={300}>
                     <PieChart>
-                      <Pie
-                        data={blk.chartData.map(d => ({
-                          name: d.category,
-                          value: d.amount,
-                        }))}
-                        dataKey="value"
-                        nameKey="name"
-                        outerRadius={110}
-                        label={({ name, percent }) =>
-                          `${name} ${(percent * 100).toFixed(0)}%`
-                        }
-                      >
+                      <Pie data={blk.chartData.map(d => ({ name: d.category, value: d.amount }))} dataKey="value" nameKey="name" outerRadius={110}
+                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
                         {blk.chartData.map((_: any, i: number) => (
                           <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                         ))}
@@ -310,10 +251,7 @@ export default function ReportsPage() {
                     </thead>
                     <tbody>
                       {(() => {
-                        const total = blk.chartData.reduce(
-                          (s: number, v: any) => s + v.amount,
-                          0
-                        )
+                        const total = blk.chartData.reduce((s: number, v: any) => s + v.amount, 0)
                         return (
                           <>
                             {blk.chartData.map((r: any, i: number) => {
@@ -321,27 +259,15 @@ export default function ReportsPage() {
                               return (
                                 <tr key={i}>
                                   <td className="p-2 border text-gray-800">{r.category}</td>
-                                  <td className="p-2 border text-right text-gray-500">
-                                    {percent.toFixed(2)}%
-                                  </td>
-                                  <td
-                                    className={`p-2 border text-right ${blk.tableColor}`}
-                                  >
-                                    {formatCurrency(r.amount)}
-                                  </td>
+                                  <td className="p-2 border text-right text-gray-500">{percent.toFixed(2)}%</td>
+                                  <td className={`p-2 border text-right ${blk.tableColor}`}>{formatCurrency(r.amount)}</td>
                                 </tr>
                               )
                             })}
                             <tr className="bg-gray-100 font-semibold">
                               <td className="p-2 border text-gray-900">합계</td>
-                              <td className="p-2 border text-right text-gray-700">
-                                100.00%
-                              </td>
-                              <td
-                                className={`p-2 border text-right ${blk.tableColor}`}
-                              >
-                                {formatCurrency(total)}
-                              </td>
+                              <td className="p-2 border text-right text-gray-700">100.00%</td>
+                              <td className={`p-2 border text-right ${blk.tableColor}`}>{formatCurrency(total)}</td>
                             </tr>
                           </>
                         )
@@ -369,24 +295,15 @@ export default function ReportsPage() {
                           <td className="p-2">{r.tx_date}</td>
                           <td className="p-2">{r.description}</td>
                           <td className="p-2">{r.category || '미분류'}</td>
-                          <td
-                            className={`p-2 text-right ${blk.tableColor}`}
-                          >
+                          <td className={`p-2 text-right ${blk.tableColor}`}>
                             {formatCurrency(Math.abs(r.amount))}
                           </td>
-                          <td className="p-2 text-gray-600">
-                            {r.memo || '-'}
-                          </td>
+                          <td className="p-2 text-gray-600">{r.memo || '-'}</td>
                         </tr>
                       ))
                     ) : (
                       <tr>
-                        <td
-                          colSpan={5}
-                          className="text-center text-gray-400 p-3"
-                        >
-                          내역 없음
-                        </td>
+                        <td colSpan={5} className="text-center text-gray-400 p-3">내역 없음</td>
                       </tr>
                     )}
                   </tbody>
