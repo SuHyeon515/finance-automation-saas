@@ -125,6 +125,7 @@ class AssignPayload(BaseModel):
     category_l1: Optional[str] = None
     category_l2: Optional[str] = None
     category_l3: Optional[str] = None
+    memo: Optional[str] = None
     is_fixed: Optional[bool] = None
     save_rule: bool = False
     rule_keyword_source: Literal['vendor','description','memo','any'] = 'any'
@@ -1036,7 +1037,6 @@ async def assign_categories(
     if not payload.transaction_ids:
         return {"ok": True, "updated": 0}
 
-    # ✅ 필드 업데이트 준비
     update_fields = {
         "category": payload.category or "미분류",
         "category_l1": payload.category_l1,
@@ -1044,22 +1044,20 @@ async def assign_categories(
         "category_l3": payload.category_l3,
     }
 
-    # ✅ memo 필드가 있으면 포함
-    if hasattr(payload, "memo"):
-        update_fields["memo"] = getattr(payload, "memo") or ""
+    # ✅ memo 필드 반영
+    if payload.memo is not None:
+        update_fields["memo"] = payload.memo.strip()
 
-    # ✅ is_fixed가 명시적으로 전달된 경우에만 포함
-    if "is_fixed" in data and data["is_fixed"] is not None:
-        update_fields["is_fixed"] = data["is_fixed"]
+    if payload.is_fixed is not None:
+        update_fields["is_fixed"] = payload.is_fixed
 
-    # === 트랜잭션 업데이트 ===
     for tid in payload.transaction_ids:
         supabase.table("transactions") \
             .update(update_fields) \
             .eq("user_id", user_id) \
             .eq("id", tid) \
             .execute()
-
+        
     # === 룰 저장 ===
     if payload.save_rule:
         sample = (
