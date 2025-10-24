@@ -17,37 +17,43 @@ export default function ReportPDFButton({ elementId, title }: Props) {
       return
     }
 
-    console.log('📸 PDF 생성 시작')
+    console.log('📸 긴 리포트 PDF 생성 시작')
 
-    // ✅ 렌더 안정화 대기
-    await new Promise(res => setTimeout(res, 1000))
+    await new Promise(res => setTimeout(res, 800))
     window.scrollTo(0, 0)
 
     const pdf = new jsPDF('p', 'mm', 'a4')
     const pdfWidth = pdf.internal.pageSize.getWidth()
     const pdfHeight = pdf.internal.pageSize.getHeight()
-
     const sections = Array.from(el.querySelectorAll('section'))
 
     for (let i = 0; i < sections.length; i++) {
       const section = sections[i] as HTMLElement
-      section.scrollIntoView()
+      console.log(`🧾 섹션 ${i + 1} 캡처 중...`)
 
-      // ✅ 각 섹션 개별 캡처
+      // html2canvas로 section 캡처
       const canvas = await html2canvas(section, {
         scale: 2,
         useCORS: true,
         allowTaint: true,
-        logging: false,
         backgroundColor: '#ffffff',
       })
 
-      const imgData = canvas.toDataURL('image/jpeg', 1.0)
       const imgWidth = pdfWidth
-      const imgHeight = (canvas.height * pdfWidth) / canvas.width
+      const imgHeight = (canvas.height * imgWidth) / canvas.width
+      const imgData = canvas.toDataURL('image/jpeg', 1.0)
 
-      if (i > 0) pdf.addPage()
-      pdf.addImage(imgData, 'JPEG', 0, 0, imgWidth, imgHeight)
+      let heightLeft = imgHeight
+      let position = 0
+
+      // 한 섹션이 길면 자동으로 여러 페이지 분할
+      while (heightLeft > 0) {
+        if (i > 0 || position > 0) pdf.addPage()
+
+        pdf.addImage(imgData, 'JPEG', 0, position - 10, imgWidth, imgHeight)
+        heightLeft -= pdfHeight
+        position -= pdfHeight
+      }
     }
 
     pdf.save(`${title}.pdf`)

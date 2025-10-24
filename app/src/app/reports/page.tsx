@@ -20,6 +20,17 @@ const ReportPDFButton = dynamic(() => import('@/components/ReportPDFButton'), { 
 const formatCurrency = (n: number) =>
   (n ?? 0).toLocaleString('ko-KR', { style: 'currency', currency: 'KRW' })
 
+// 밝기 계산 (배경색이 밝은지 어두운지 판별)
+function getTextColor(hexColor: string) {
+  const c = hexColor.substring(1) // # 제거
+  const rgb = parseInt(c, 16)
+  const r = (rgb >> 16) & 0xff
+  const g = (rgb >> 8) & 0xff
+  const b = rgb & 0xff
+  const brightness = (r * 299 + g * 587 + b * 114) / 1000
+  return brightness > 150 ? '#222' : '#fff' // 밝으면 검정, 어두우면 흰색
+}
+
 // ============================
 // 리포트 페이지
 // ============================
@@ -96,6 +107,7 @@ export default function ReportsPage() {
   const fixedRows = useMemo(() => data?.expense_details?.filter((r: any) => r.is_fixed) || [], [data])
   const variableRows = useMemo(() => data?.expense_details?.filter((r: any) => !r.is_fixed) || [], [data])
   const incomeRows = useMemo(() => data?.income_details || [], [data])
+  const totalIncome = Math.abs(data?.summary?.total_in || 0)
 
   const mergeUnclassified = (arr: any[], key: string) => {
     const grouped: Record<string, number> = {}
@@ -112,7 +124,7 @@ export default function ReportsPage() {
     { label: '순이익', value: data?.summary?.net || 0, color: 'text-blue-600', bg: 'bg-blue-50' },
   ]
 
-  const PIE_COLORS = ['#10b981', '#6366f1', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#f97316', '#22c55e', '#0ea5e9', '#eab308']
+  const PIE_COLORS = ['#16a34a', '#22c55e', '#10b981', '#0ea5e9', '#6366f1', '#8b5cf6', '#f97316', '#f59e0b', '#ef4444', '#dc2626']
 
   // ===========================
   // 렌더링
@@ -229,8 +241,33 @@ export default function ReportsPage() {
                 <div className="flex-1">
                   <ResponsiveContainer width="100%" height={300}>
                     <PieChart>
-                      <Pie data={blk.chartData.map(d => ({ name: d.category, value: d.amount }))} dataKey="value" nameKey="name" outerRadius={110}
-                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                      <Pie
+                        data={blk.chartData.map(d => ({ name: d.category, value: d.amount }))}
+                        dataKey="value"
+                        nameKey="name"
+                        outerRadius={100} // ✅ PDF 호환 안정화
+                        labelLine={false}
+                        label={({ cx, cy, midAngle, innerRadius, outerRadius, percent, name, index }) => {
+                          const RADIAN = Math.PI / 180
+                          const radius = innerRadius + (outerRadius - innerRadius) * 0.6
+                          const x = cx + radius * Math.cos(-midAngle * RADIAN)
+                          const y = cy + radius * Math.sin(-midAngle * RADIAN)
+                          const color = getTextColor(PIE_COLORS[index % PIE_COLORS.length])
+                          return (
+                            <text
+                              x={x}
+                              y={y}
+                              fill={color}
+                              textAnchor="middle"
+                              dominantBaseline="central"
+                              fontSize={12}
+                              fontWeight="600"
+                            >
+                              {`${name} ${(percent * 100).toFixed(0)}%`}
+                            </text>
+                          )
+                        }}
+                      >
                         {blk.chartData.map((_: any, i: number) => (
                           <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                         ))}
@@ -267,7 +304,9 @@ export default function ReportsPage() {
                             <tr className="bg-gray-100 font-semibold">
                               <td className="p-2 border text-gray-900">합계</td>
                               <td className="p-2 border text-right text-gray-700">100.00%</td>
-                              <td className={`p-2 border text-right ${blk.tableColor}`}>{formatCurrency(total)}</td>
+                              <td className="p-2 border text-right text-green-600">
+                                {formatCurrency(totalIncome)}
+                              </td>
                             </tr>
                           </>
                         )

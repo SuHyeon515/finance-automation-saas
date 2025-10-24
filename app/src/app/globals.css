@@ -17,7 +17,20 @@
 table, tr, td, th {
   page-break-inside: avoid;
 }
+@media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
 
+  table, tr, td, th {
+    page-break-inside: avoid !important;
+  }
+
+  section {
+    page-break-inside: auto !important;
+  }
+}
 /* ✅ section 단위로 페이지 나눔 */
 section {
   page-break-before: auto;
