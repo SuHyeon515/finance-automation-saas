@@ -1,7 +1,6 @@
 'use client'
 
 import jsPDF from 'jspdf'
-import html2canvas from 'html2canvas'
 import { useCallback } from 'react'
 
 interface Props {
@@ -19,19 +18,12 @@ export default function ReportPDFButton({ elementId, title }: Props) {
 
     console.log('📸 긴 리포트 PDF 생성 시작')
 
-    // ✅ 모든 캔버스 / 차트가 렌더 완료될 때까지 대기
-    await new Promise<void>((resolve) => {
-      const check = () => {
-        const charts = document.querySelectorAll('canvas')
-        if (charts.length > 0 && Array.from(charts).every(c => c.height > 0 && c.width > 0))
-          resolve()
-        else setTimeout(check, 400)
-      }
-      check()
-    })
+    // ✅ html2canvas 동적 import (Next.js 안전)
+    const html2canvas = (await import('html2canvas')).default
 
+    // ✅ 렌더 안정화 대기
+    await new Promise(res => setTimeout(res, 1200))
     window.scrollTo(0, 0)
-    await new Promise(res => setTimeout(res, 600)) // 안정화 대기
 
     const pdf = new jsPDF('p', 'mm', 'a4')
     const pdfWidth = pdf.internal.pageSize.getWidth()
@@ -43,6 +35,7 @@ export default function ReportPDFButton({ elementId, title }: Props) {
     let page = 0
     for (const [i, section] of sections.entries()) {
       console.log(`🧾 섹션 ${i + 1} 캡처 중...`)
+
       const canvas = await html2canvas(section as HTMLElement, {
         scale: 2,
         useCORS: true,
@@ -50,7 +43,10 @@ export default function ReportPDFButton({ elementId, title }: Props) {
         backgroundColor: '#ffffff',
         scrollY: 0,
         windowWidth: document.documentElement.scrollWidth,
-      })
+        windowHeight: document.documentElement.scrollHeight,
+        logging: false,
+        timeout: 8000, // ✅ 멈춤 방지
+      } as any)
 
       const imgData = canvas.toDataURL('image/jpeg', 1.0)
       const imgWidth = pdfWidth
@@ -59,7 +55,6 @@ export default function ReportPDFButton({ elementId, title }: Props) {
       let heightLeft = imgHeight
       let position = 0
 
-      // ✅ 한 섹션이 페이지를 넘어가면 나눠서 추가
       while (heightLeft > 0) {
         if (page > 0 || position > 0) pdf.addPage()
         pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight)
