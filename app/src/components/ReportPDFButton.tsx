@@ -19,42 +19,63 @@ export default function ReportPDFButton({ elementId, title }: Props) {
 
     console.log('📸 긴 리포트 PDF 생성 시작')
 
-    await new Promise(res => setTimeout(res, 800))
+    // ✅ 모든 차트가 완전히 렌더될 때까지 대기
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        const charts = document.querySelectorAll('canvas')
+        if (charts.length > 0 && Array.from(charts).every(c => c.height > 0)) resolve()
+        else setTimeout(check, 400)
+      }
+      check()
+    })
+
+    // ✅ 스크롤 최상단으로 이동
     window.scrollTo(0, 0)
+
+    // ✅ 캡처 대상 복제본 생성 (잘림 방지)
+    const clone = el.cloneNode(true) as HTMLElement
+    clone.style.marginTop = '60px'
+    clone.style.paddingTop = '40px'
+    clone.style.background = '#ffffff'
+    clone.style.width = `${el.scrollWidth}px`
+    clone.style.position = 'absolute'
+    clone.style.top = '0'
+    clone.style.left = '0'
+    clone.style.zIndex = '-1'
+    document.body.appendChild(clone)
 
     const pdf = new jsPDF('p', 'mm', 'a4')
     const pdfWidth = pdf.internal.pageSize.getWidth()
     const pdfHeight = pdf.internal.pageSize.getHeight()
-    const sections = Array.from(el.querySelectorAll('section'))
 
-    for (let i = 0; i < sections.length; i++) {
-      const section = sections[i] as HTMLElement
-      console.log(`🧾 섹션 ${i + 1} 캡처 중...`)
+    const canvas = await html2canvas(clone, {
+      scale: 2, // 고해상도 캡처
+      useCORS: true,
+      allowTaint: true,
+      scrollY: 0,
+      backgroundColor: '#ffffff',
+      windowWidth: clone.scrollWidth,
+      windowHeight: clone.scrollHeight,
+    })
 
-      // html2canvas로 section 캡처
-      const canvas = await html2canvas(section, {
-        scale: 2,
-        useCORS: true,
-        allowTaint: true,
-        backgroundColor: '#ffffff',
-      })
+    const imgWidth = pdfWidth
+    const imgHeight = (canvas.height * imgWidth) / canvas.width
+    const imgData = canvas.toDataURL('image/jpeg', 1.0)
 
-      const imgWidth = pdfWidth
-      const imgHeight = (canvas.height * imgWidth) / canvas.width
-      const imgData = canvas.toDataURL('image/jpeg', 1.0)
+    let heightLeft = imgHeight
+    let position = 0
+    let page = 1
 
-      let heightLeft = imgHeight
-      let position = 0
-
-      // 한 섹션이 길면 자동으로 여러 페이지 분할
-      while (heightLeft > 0) {
-        if (i > 0 || position > 0) pdf.addPage()
-
-        pdf.addImage(imgData, 'JPEG', 0, position - 10, imgWidth, imgHeight)
-        heightLeft -= pdfHeight
-        position -= pdfHeight
-      }
+    while (heightLeft > 0) {
+      if (page > 1) pdf.addPage()
+      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight)
+      heightLeft -= pdfHeight
+      position -= pdfHeight
+      page++
     }
+
+    // ✅ 메모리 정리
+    document.body.removeChild(clone)
 
     pdf.save(`${title}.pdf`)
     console.log('✅ PDF 저장 완료')
