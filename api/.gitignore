@@ -1,0 +1,18 @@
+# Node.js
+node_modules/
+
+# Environment files
+.env
+.env.local
+api/.env
+app/.env.local
+
+# macOS system files
+.DS_Store
+
+# Python cache
+__pycache__/
+*.pyc
+
+# VSCode settings
+.vscode/

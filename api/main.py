@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from urllib.parse import quote
 from pydantic import BaseModel, field_validator
 import re
+from utils import get_user_id, get_user_role  # ⚙️ get_user_role 추가 필요
 
 load_dotenv()
 
@@ -1002,6 +1003,7 @@ async def assign_categories(
     authorization: Optional[str] = Header(None)
 ):
     user_id = await get_user_id(authorization)
+    print("🧾 [assign] payload:", payload.model_dump())
     if not payload.transaction_ids:
         return {"ok": True, "updated": 0}
 
@@ -1187,6 +1189,47 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         "income_details": income_details,
         "expense_details": expense_details
     }
+
+
+@app.get("/analyses/meta")
+async def get_analyses_meta(
+    branch: str,
+    authorization: Optional[str] = Header(None)
+):
+    """
+    GET /analyses/meta?branch=동탄역점
+    👉 해당 유저 + 지점의 메타데이터 불러오기
+    """
+    user_id = await get_user_id(authorization)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    try:
+        # ✅ Supabase 요청
+        res = (
+            supabase.table("analyses_meta")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("branch", branch)
+            .maybe_single()
+            .execute()
+        )
+
+        # ✅ 안전 처리: None 방지
+        data = getattr(res, "data", None)
+
+        if data:
+            # ✅ 정상적으로 데이터가 존재할 경우 그대로 반환
+            return data
+        else:
+            # ✅ 데이터가 없을 경우 기본 구조 반환
+            return {"designers": [], "interns": 0, "visitors_total": 0}
+
+    except Exception as e:
+        # ✅ 에러 발생 시에도 안전하게 기본값 반환
+        print("[❌ get_analyses_meta 오류 발생]", e)
+        return {"designers": [], "interns": 0, "visitors_total": 0}
+
 
 @app.post("/analyses/meta")
 async def save_analyses_meta(
