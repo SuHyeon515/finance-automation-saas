@@ -6,6 +6,8 @@ import {
   LineChart, Line, Tooltip, XAxis, YAxis, ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts'
 import html2canvas from 'html2canvas'
+
+import html2pdf from 'html2pdf.js'
 import jsPDF from 'jspdf'
 
 const formatCurrency = (n: number) =>
@@ -131,53 +133,46 @@ export default function ReportsPage() {
   /* ===========================
      ✅ PDF 전체 페이지 캡처 버전
   ============================ */
-  const handleDownloadPDF = async () => {
+    const handleDownloadPDF = async () => {
     if (!reportRef.current) return;
 
-    // 스크롤 상단으로
+    // 스크롤 맨 위로
     window.scrollTo(0, 0);
 
-    // 렌더링 완료 대기 (차트 포함)
+    // 렌더링 대기
     await new Promise(resolve => setTimeout(resolve, 1500));
 
-    const pdf = new jsPDF('p', 'mm', 'a4');
-    const pdfWidth = pdf.internal.pageSize.getWidth();
-    const pdfHeight = pdf.internal.pageSize.getHeight();
-
+    const element = reportRef.current;
     const title = `${branch || '전체지점'} 리포트`;
-    const dateRange = `${year}년 ${startMonth}월 ~ ${endMonth}월`;
-    const created = `생성일자: ${new Date().toLocaleDateString()}`;
+    const fileName = `${title}_${year}_${startMonth}~${endMonth}.pdf`;
 
-    // reportRef 안의 모든 section 개별 캡처
-    const sections = Array.from(reportRef.current.querySelectorAll('section'));
-    for (let i = 0; i < sections.length; i++) {
-      const el = sections[i];
-      const canvas = await html2canvas(el, {
+    // 옵션 설정
+    const opt = {
+      margin: [10, 15, 10, 15],
+      filename: fileName,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: {
         scale: 2,
         useCORS: true,
         backgroundColor: '#ffffff',
-        logging: false,
-      });
-      const imgData = canvas.toDataURL('image/jpeg', 0.95);
-      const imgWidth = pdfWidth;
-      const imgHeight = (canvas.height * pdfWidth) / canvas.width;
+        scrollY: 0,
+      },
+      jsPDF: {
+        unit: 'mm',
+        format: 'a4',
+        orientation: 'p',
+      },
+      pagebreak: {
+        mode: ['css', 'legacy'],
+        before: '.page-break', // 필요시 수동 분할 가능
+        avoid: ['tr', 'table', 'section'], // 표 중간 잘림 방지
+      },
+    };
 
-      if (i > 0) pdf.addPage();
-
-      // 헤더
-      pdf.setFontSize(14);
-      pdf.text(`📊 ${title}`, 10, 15);
-      pdf.setFontSize(10);
-      pdf.text(dateRange, 10, 22);
-      pdf.text(created, 10, 28);
-
-      // 본문 이미지
-      pdf.addImage(imgData, 'JPEG', 0, 35, imgWidth, imgHeight);
-    }
-
-    pdf.save(`${title}_${year}_${startMonth}~${endMonth}.pdf`);
+    // 변환 시작
+    await html2pdf().from(element).set(opt).save();
   };
-  
+
   /* ===========================
      렌더링
   ============================ */

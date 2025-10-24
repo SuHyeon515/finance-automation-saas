@@ -13,11 +13,20 @@
   --color-card: #ffffff;
   --color-muted: #64748b;
 }
-
-body {
-  @apply bg-[var(--color-bg)] text-[var(--color-text)] font-sans antialiased leading-relaxed;
+/* ✅ 표 중간 잘림 방지 */
+table, tr, td, th {
+  page-break-inside: avoid;
 }
 
+/* ✅ section 단위로 페이지 나눔 */
+section {
+  page-break-before: auto;
+  page-break-after: auto;
+}
+body {
+  @apply bg-[var(--color-bg)] text-[var(--color-text)] font-sans antialiased leading-relaxed;
+  font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+}
 /* === 기본 컨테이너 === */
 .container {
   @apply max-w-6xl mx-auto px-5 md:px-8;
