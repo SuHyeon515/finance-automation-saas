@@ -6,7 +6,6 @@ import {
   LineChart, Line, Tooltip, XAxis, YAxis, ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts'
 import html2canvas from 'html2canvas'
-
 import html2pdf from 'html2pdf.js'
 import jsPDF from 'jspdf'
 
@@ -170,9 +169,9 @@ export default function ReportsPage() {
     };
 
     // 변환 시작
+    // @ts-ignore
     await html2pdf().from(element).set(opt).save();
   };
-
   /* ===========================
      렌더링
   ============================ */
