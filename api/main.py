@@ -860,7 +860,12 @@ async def list_transactions(
     """전체 거래 관리 (미분류 + 분류 완료 포함)"""
     user_id = await get_user_id(authorization)
 
-    q = supabase.table("transactions").select("*").eq("user_id", user_id)
+    # ✅ 명시적으로 필요한 필드 선택 (is_fixed 포함)
+    q = (
+        supabase.table("transactions")
+        .select("id, user_id, branch, tx_date, description, amount, category, memo, is_fixed")
+        .eq("user_id", user_id)
+    )
 
     # ✅ 지점 필터 (공백/대소문자 무시)
     if branch:
@@ -869,22 +874,22 @@ async def list_transactions(
     # ✅ 기간 필터 (연/월이 없으면 전체 반환)
     if year and month:
         start = f"{year}-{month:02d}-01"
-        if month == 12:
-            end = f"{year + 1}-01-01"
-        else:
-            end = f"{year}-{month + 1:02d}-01"
+        end = f"{year + 1}-01-01" if month == 12 else f"{year}-{month + 1:02d}-01"
         q = q.gte("tx_date", start).lt("tx_date", end)
     elif year:
         q = q.gte("tx_date", f"{year}-01-01").lt("tx_date", f"{year + 1}-01-01")
 
+    # ✅ 정렬 + 페이지 처리
     q = q.order("tx_date", desc=True).range(offset, offset + limit - 1)
     data = q.execute().data or []
 
-    # ✅ null-safe 처리
+    # ✅ null-safe 처리 (특히 is_fixed)
     for row in data:
         row["memo"] = row.get("memo", "") or ""
         row["category"] = row.get("category", "") or ""
         row["branch"] = row.get("branch", "") or ""
+        # ⚙️ 중요: is_fixed가 None이면 False로 기본값 설정
+        row["is_fixed"] = bool(row.get("is_fixed", False))
 
     return {
         "items": data,
