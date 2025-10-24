@@ -135,19 +135,28 @@ export default function ReportsPage() {
   if (typeof window === 'undefined') return;
   if (!reportRef.current) return;
 
-  // ✅ 브라우저 환경에서만 import
-  const html2pdf = (await import('html2pdf.js')).default;
-  const html2canvas = (await import('html2canvas')).default;
+  // ✅ 동적 import (SSR 방지)
+  const html2pdfModule = await import('html2pdf.js');
+  const html2pdf = html2pdfModule.default || html2pdfModule;
 
-  // ✅ 차트 렌더링 대기
-  const waitForCharts = () => new Promise<void>(resolve => {
-    const check = () => {
-      const charts = document.querySelectorAll('canvas');
-      if (charts.length > 0 && Array.from(charts).every(c => c.height > 0)) resolve();
-      else setTimeout(check, 500);
-    };
-    check();
-  });
+  // ✅ window에 html2canvas 강제 주입 (필수!)
+  const html2canvasModule = await import('html2canvas');
+  (window as any).html2canvas = html2canvasModule.default;
+
+  // ✅ 차트 렌더 완료 대기
+  const waitForCharts = () =>
+    new Promise<void>((resolve) => {
+      const check = () => {
+        const charts = document.querySelectorAll('canvas');
+        if (
+          charts.length > 0 &&
+          Array.from(charts).every((c) => c.height > 0 && c.width > 0)
+        )
+          resolve();
+        else setTimeout(check, 500);
+      };
+      check();
+    });
   await waitForCharts();
 
   window.scrollTo(0, 0);
@@ -172,11 +181,14 @@ export default function ReportsPage() {
     pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', 'table', 'section'] },
   };
 
-  // ✅ html2canvas도 강제로 사용
-  (window as any).html2canvas = html2canvas;
-
-  // @ts-ignore
-  await html2pdf().from(element).set(opt).save();
+  try {
+    // @ts-ignore
+    await html2pdf().from(element).set(opt).save();
+    console.log('✅ PDF 저장 완료');
+  } catch (e) {
+    console.error('❌ PDF 생성 실패:', e);
+    alert('PDF 생성 중 오류가 발생했습니다.');
+  }
 };
 
   /* ===========================
