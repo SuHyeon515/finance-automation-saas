@@ -21,7 +21,7 @@ export default function UnclassifiedPage() {
   const [rules, setRules] = useState<Rule[]>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [filterType, setFilterType] = useState<'all' | 'in' | 'out'>('all')
+  const [filterType, setFilterType] = useState<'all' | 'in' | 'out' | 'unclassified'>('all')
   const [selectedMonth, setSelectedMonth] = useState<string>('')
   const [branchList, setBranchList] = useState<string[]>([])
   const [selectedBranch, setSelectedBranch] = useState<string>('')
@@ -125,8 +125,13 @@ export default function UnclassifiedPage() {
     const arr = rows
       .filter(r => r.tx_date?.startsWith(selectedMonth))
       .sort((a, b) => new Date(a.tx_date).getTime() - new Date(b.tx_date).getTime())
-    if (filterType === 'in') return arr.filter(r => Number(r.amount) > 0)
-    if (filterType === 'out') return arr.filter(r => Number(r.amount) < 0)
+
+    if (filterType === 'in')
+      return arr.filter(r => Number(r.amount) > 0)
+    if (filterType === 'out')
+      return arr.filter(r => Number(r.amount) < 0)
+    if (filterType === 'unclassified')
+      return arr.filter(r => !r.category || r.category.trim() === '' || r.category === '미분류')
     return arr
   }, [rows, selectedMonth, filterType])
 
@@ -228,17 +233,31 @@ export default function UnclassifiedPage() {
         )}
 
         {/* ✅ 필터 버튼 */}
-        <div className="flex gap-2">
-          <button onClick={() => setFilterType('all')} className={`px-3 py-1 rounded ${filterType === 'all' ? 'bg-gray-900 text-white' : 'bg-gray-200'}`}>전체</button>
-          <button onClick={() => setFilterType('in')} className={`px-3 py-1 rounded ${filterType === 'in' ? 'bg-green-600 text-white' : 'bg-gray-200'}`}>수입</button>
-          <button onClick={() => setFilterType('out')} className={`px-3 py-1 rounded ${filterType === 'out' ? 'bg-red-600 text-white' : 'bg-gray-200'}`}>지출</button>
+        <div className="flex gap-2 ml-auto">
+          <button onClick={() => setFilterType('all')}
+            className={`px-3 py-1 rounded ${filterType === 'all' ? 'bg-gray-900 text-white' : 'bg-gray-200'}`}>
+            전체
+          </button>
+          <button onClick={() => setFilterType('in')}
+            className={`px-3 py-1 rounded ${filterType === 'in' ? 'bg-green-600 text-white' : 'bg-gray-200'}`}>
+            수입
+          </button>
+          <button onClick={() => setFilterType('out')}
+            className={`px-3 py-1 rounded ${filterType === 'out' ? 'bg-red-600 text-white' : 'bg-gray-200'}`}>
+            지출
+          </button>
+          <button onClick={() => setFilterType('unclassified')}
+            className={`px-3 py-1 rounded flex items-center gap-1 ${filterType === 'unclassified' ? 'bg-yellow-500 text-white' : 'bg-gray-200'}`}>
+            ⚠️ 미분류
+          </button>
         </div>
+      </div>
 
-        <div className="ml-auto text-sm">
-          💰 수입 <b className="text-green-600">{totals.inTotal.toLocaleString()}</b>원 ·{' '}
-          지출 <b className="text-red-600">{totals.outTotal.toLocaleString()}</b>원 ·{' '}
-          순이익 <b className="text-blue-600">{totals.net.toLocaleString()}</b>원
-        </div>
+      {/* ✅ 통계 표시 */}
+      <div className="text-sm text-right mt-2">
+        💰 수입 <b className="text-green-600">{totals.inTotal.toLocaleString()}</b>원 ·{' '}
+        지출 <b className="text-red-600">{totals.outTotal.toLocaleString()}</b>원 ·{' '}
+        순이익 <b className="text-blue-600">{totals.net.toLocaleString()}</b>원
       </div>
 
       {/* ✅ 테이블 */}
@@ -262,8 +281,8 @@ export default function UnclassifiedPage() {
                 const isExpense = Number(r.amount) < 0
                 const catList = isExpense
                   ? r.is_fixed
-                    ? fixedExpenseCats // ✅ 고정지출일 때
-                    : variableExpenseCats // ✅ 변동지출일 때
+                    ? fixedExpenseCats
+                    : variableExpenseCats
                   : incomeCats
 
                 return (
@@ -295,10 +314,10 @@ export default function UnclassifiedPage() {
                       </div>
                     </td>
 
-                    {/* ✅ 메모 및 고정/변동 선택 */}
+                    {/* ✅ 메모 및 고정/변동 버튼 */}
                     <td className="p-2">
                       <div className="flex flex-col gap-2">
-                        {/* 메모 입력 */}
+                        {/* 메모 */}
                         <div className="flex items-center gap-2">
                           <input
                             type="text"
@@ -335,7 +354,7 @@ export default function UnclassifiedPage() {
                           )}
                         </div>
 
-                        {/* ✅ 고정/변동 버튼 (지출만 표시) */}
+                        {/* ✅ 고정/변동 버튼 */}
                         {isExpense && (
                           <div className="flex gap-2 text-xs mt-1">
                             <button
