@@ -125,7 +125,7 @@ class AssignPayload(BaseModel):
     category_l1: Optional[str] = None
     category_l2: Optional[str] = None
     category_l3: Optional[str] = None
-    is_fixed: bool = False
+    is_fixed: Optional[bool] = None
     save_rule: bool = False
     rule_keyword_source: Literal['vendor','description','memo','any'] = 'any'
 

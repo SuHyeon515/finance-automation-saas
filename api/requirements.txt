@@ -4,7 +4,7 @@ python-multipart
 pandas
 openpyxl
 httpx
-supabase
+supabase>=2.0.0
 pydantic
 openai>=1.40.0
 python-dotenv
