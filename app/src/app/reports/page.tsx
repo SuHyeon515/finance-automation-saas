@@ -6,7 +6,6 @@ import {
   LineChart, Line, Tooltip, XAxis, YAxis, ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts'
 import html2canvas from 'html2canvas'
-import html2pdf from 'html2pdf.js'
 import jsPDF from 'jspdf'
 
 const formatCurrency = (n: number) =>
@@ -132,22 +131,21 @@ export default function ReportsPage() {
   /* ===========================
      ✅ PDF 전체 페이지 캡처 버전
   ============================ */
-    const handleDownloadPDF = async () => {
+  const handleDownloadPDF = async () => {
     if (!reportRef.current) return;
 
-    // 스크롤 맨 위로
-    window.scrollTo(0, 0);
+    // 🧩 브라우저 환경에서만 import (SSR 방지)
+    const html2pdf = (await import('html2pdf.js')).default;
 
-    // 렌더링 대기
+    window.scrollTo(0, 0);
     await new Promise(resolve => setTimeout(resolve, 1500));
 
     const element = reportRef.current;
     const title = `${branch || '전체지점'} 리포트`;
     const fileName = `${title}_${year}_${startMonth}~${endMonth}.pdf`;
 
-    // 옵션 설정
-    const opt = {
-      margin: [10, 15, 10, 15],
+    const opt: any = {
+      margin: [10, 15, 10, 15] as [number, number, number, number],
       filename: fileName,
       image: { type: 'jpeg', quality: 0.98 },
       html2canvas: {
@@ -163,15 +161,14 @@ export default function ReportsPage() {
       },
       pagebreak: {
         mode: ['css', 'legacy'],
-        before: '.page-break', // 필요시 수동 분할 가능
-        avoid: ['tr', 'table', 'section'], // 표 중간 잘림 방지
+        avoid: ['tr', 'table', 'section'],
       },
     };
 
-    // 변환 시작
     // @ts-ignore
     await html2pdf().from(element).set(opt).save();
   };
+
   /* ===========================
      렌더링
   ============================ */
