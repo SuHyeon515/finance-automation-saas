@@ -8,9 +8,6 @@ import {
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
 
-/* ===========================
-   공용 포맷터
-=========================== */
 const formatCurrency = (n: number) =>
   (n ?? 0).toLocaleString('ko-KR', { style: 'currency', currency: 'KRW' })
 
@@ -23,9 +20,6 @@ const formatShortNumber = (num: number) => {
   return String(num)
 }
 
-/* ===========================
-   리포트 메인 컴포넌트
-=========================== */
 export default function ReportsPage() {
   const now = new Date()
   const [year, setYear] = useState(now.getFullYear())
@@ -35,24 +29,16 @@ export default function ReportsPage() {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-
   const [granularity, setGranularity] = useState<'day' | 'week' | 'month'>('month')
-  const [startDate, setStartDate] = useState('')
-  const [endDate, setEndDate] = useState('')
   const [startMonth, setStartMonth] = useState(month)
   const [endMonth, setEndMonth] = useState(month)
-
   const reportRef = useRef<HTMLDivElement>(null)
 
-  /* ========== 초기 메타 ========== */
   useEffect(() => {
     const loadBranches = async () => {
       try {
         const headers = await apiAuthHeader()
-        const res = await fetch(`${API_BASE}/meta/branches`, {
-          headers,
-          credentials: 'include',
-        })
+        const res = await fetch(`${API_BASE}/meta/branches`, { headers, credentials: 'include' })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const json = await res.json()
         setBranches(Array.isArray(json) ? json : [])
@@ -63,25 +49,14 @@ export default function ReportsPage() {
     loadBranches()
   }, [])
 
-  /* ========== 요청 바디 빌더 ========== */
-  const buildReportBody = () => {
-    const body: any = { year, branch, granularity }
+  const buildReportBody = () => ({
+    year,
+    branch,
+    granularity,
+    start_month: startMonth,
+    end_month: endMonth,
+  })
 
-    if (granularity === 'day') {
-      body.month = month
-      if (startDate) body.start_date = startDate
-      if (endDate) body.end_date = endDate
-    } else if (granularity === 'week') {
-      body.month = month
-    } else {
-      body.month = startMonth
-      body.start_month = startMonth
-      body.end_month = endMonth
-    }
-    return body
-  }
-
-  /* ========== 보고서 불러오기 ========== */
   const loadReport = async () => {
     setLoading(true)
     setError('')
@@ -89,22 +64,16 @@ export default function ReportsPage() {
       const headers = await apiAuthHeader()
       const res = await fetch(`${API_BASE}/reports`, {
         method: 'POST',
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json',
-        },
+        headers: { ...headers, 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify(buildReportBody()),
       })
       if (!res.ok) throw new Error(await res.text())
       const result = await res.json()
-
-      result.by_category = result.by_category || []
-      result.expense_details = result.expense_details || []
-      result.income_details = result.income_details || []
-      result.by_period = result.by_period || []
-      result.summary = result.summary || { total_in: 0, total_out: 0, net: 0 }
-
+      result.by_category ??= []
+      result.expense_details ??= []
+      result.income_details ??= []
+      result.summary ??= { total_in: 0, total_out: 0, net: 0 }
       setData(result)
     } catch (e: any) {
       setError(e.message || '불러오기 실패')
@@ -112,19 +81,13 @@ export default function ReportsPage() {
       setLoading(false)
     }
   }
+
   useEffect(() => {
     loadReport()
   }, [])
 
-  /* ========== 데이터 정리 ========== */
-  const fixedRows = useMemo(
-    () => data?.expense_details?.filter((r: any) => r.is_fixed) || [],
-    [data]
-  )
-  const variableRows = useMemo(
-    () => data?.expense_details?.filter((r: any) => !r.is_fixed) || [],
-    [data]
-  )
+  const fixedRows = useMemo(() => data?.expense_details?.filter((r: any) => r.is_fixed) || [], [data])
+  const variableRows = useMemo(() => data?.expense_details?.filter((r: any) => !r.is_fixed) || [], [data])
   const incomeRows = useMemo(() => data?.income_details || [], [data])
 
   const mergeUnclassified = (arr: any[], key: string) => {
@@ -146,10 +109,9 @@ export default function ReportsPage() {
     })
     const result: Record<string, { date: string; amount: number }[]> = {}
     Object.entries(grouped).forEach(([cat, dateObj]) => {
-      const sorted = Object.entries(dateObj)
+      result[cat] = Object.entries(dateObj)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([date, amount]) => ({ date, amount }))
-      result[cat] = sorted
     })
     return result
   }
@@ -163,46 +125,49 @@ export default function ReportsPage() {
   const PIE_COLORS = ['#10b981', '#6366f1', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#f97316', '#22c55e', '#0ea5e9', '#eab308']
 
   /* ===========================
-     ✅ PDF 저장 기능 (개선버전)
+     ✅ PDF 저장 기능 (완전 개선)
   ============================ */
   const handleDownloadPDF = async () => {
     if (!reportRef.current) return
 
+    const element = reportRef.current
+    const canvas = await html2canvas(element, {
+      scale: 2, // 선명도
+      useCORS: true,
+      logging: false,
+    })
+
+    const imgData = canvas.toDataURL('image/png')
     const pdf = new jsPDF('p', 'mm', 'a4')
-    const pdfWidth = pdf.internal.pageSize.getWidth()
-    const pdfHeight = pdf.internal.pageSize.getHeight()
-    const children = Array.from(reportRef.current.children)
+
+    const pageWidth = pdf.internal.pageSize.getWidth()
+    const pageHeight = pdf.internal.pageSize.getHeight()
+    const imgWidth = pageWidth
+    const imgHeight = (canvas.height * imgWidth) / canvas.width
+
+    let heightLeft = imgHeight
+    let position = 0
 
     const title = `${branch || '전체지점'} 리포트`
     const dateRange = `${year}년 ${startMonth}월 ~ ${endMonth}월`
     const created = `생성일자: ${new Date().toLocaleDateString()}`
 
-    for (let i = 0; i < children.length; i++) {
-      const el = children[i] as HTMLElement
-      const canvas = await html2canvas(el, { scale: 3, useCORS: true })
-      const imgData = canvas.toDataURL('image/png')
-      const imgHeight = (canvas.height * pdfWidth) / canvas.width
-
-      // 상단 헤더
+    while (heightLeft > 0) {
       pdf.setFontSize(14)
       pdf.text(`📊 ${title}`, 10, 15)
       pdf.setFontSize(10)
       pdf.text(dateRange, 10, 22)
       pdf.text(created, 10, 28)
 
-      pdf.addImage(imgData, 'PNG', 0, 35, pdfWidth, imgHeight)
-      pdf.setFontSize(10)
-      pdf.text(`Page ${i + 1}`, pdfWidth - 25, pdfHeight - 10)
-
-      if (i < children.length - 1) pdf.addPage()
+      pdf.addImage(imgData, 'PNG', 0, position - 30, imgWidth, imgHeight)
+      heightLeft -= pageHeight
+      position -= pageHeight
+      if (heightLeft > 0) pdf.addPage()
     }
 
     pdf.save(`${title}_${year}_${startMonth}~${endMonth}.pdf`)
   }
 
-  /* ===========================
-     렌더링
-  ============================ */
   return (
     <main className="p-6 space-y-8 bg-gray-100 min-h-screen">
       <header className="flex flex-wrap items-end gap-3">
@@ -227,28 +192,16 @@ export default function ReportsPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-gray-500">보기 단위</label>
-            <select className="border rounded px-3 py-2" value={granularity} onChange={e => setGranularity(e.target.value as any)}>
-              <option value="day">일별</option>
-              <option value="week">주별</option>
-              <option value="month">월별</option>
-            </select>
+            <label className="block text-xs text-gray-500">시작 월</label>
+            <input type="number" min={1} max={12} className="border rounded px-3 py-2 w-20"
+                   value={startMonth} onChange={e => setStartMonth(Number(e.target.value))} />
           </div>
 
-          {granularity === 'month' && (
-            <>
-              <div>
-                <label className="block text-xs text-gray-500">시작 월</label>
-                <input type="number" min={1} max={12} className="border rounded px-3 py-2 w-20"
-                       value={startMonth} onChange={e => setStartMonth(Number(e.target.value))} />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500">종료 월</label>
-                <input type="number" min={startMonth} max={12} className="border rounded px-3 py-2 w-20"
-                       value={endMonth} onChange={e => setEndMonth(Number(e.target.value))} />
-              </div>
-            </>
-          )}
+          <div>
+            <label className="block text-xs text-gray-500">종료 월</label>
+            <input type="number" min={startMonth} max={12} className="border rounded px-3 py-2 w-20"
+                   value={endMonth} onChange={e => setEndMonth(Number(e.target.value))} />
+          </div>
 
           <button onClick={loadReport} className="ml-auto bg-black text-white rounded px-4 py-2 hover:opacity-80">
             조회
@@ -276,13 +229,13 @@ export default function ReportsPage() {
 
       {/* === 본문 === */}
       {data && (
-        <div ref={reportRef} className="space-y-10">
+        <div ref={reportRef} className="space-y-10 bg-white p-6 rounded-xl">
           {[
             { title: '📈 수입', colorText: 'text-green-700', stroke: '#16a34a', rows: incomeRows, chartData: mergeUnclassified((data?.by_category || []).filter((v: any) => v.sum > 0).map((v: any) => ({ category: v.category || '미분류', amount: v.sum })), 'category'), tableColor: 'text-green-600' },
             { title: '🏠 고정지출', colorText: 'text-indigo-700', stroke: '#4f46e5', rows: fixedRows, chartData: mergeUnclassified(fixedRows, 'category'), tableColor: 'text-indigo-600' },
             { title: '🚗 변동지출', colorText: 'text-orange-700', stroke: '#f97316', rows: variableRows, chartData: mergeUnclassified(variableRows, 'category'), tableColor: 'text-orange-600' }
           ].map((blk, idx) => (
-            <section key={idx} className="bg-white rounded-xl border shadow-sm p-6 space-y-6">
+            <section key={idx} className="border-b border-gray-200 pb-10">
               <h2 className={`text-xl font-semibold ${blk.colorText}`}>{blk.title}</h2>
 
               {/* ✅ 파이차트 + 표 2단 구성 */}

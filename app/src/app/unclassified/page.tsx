@@ -143,7 +143,7 @@ export default function UnclassifiedPage() {
 
   // ✅ 카테고리 + 메모 저장 함수
   const handleAssignWithMemo = async (txId: string, category: string, memo?: string) => {
-    if (!category) return
+    if (!txId) return
     setSaving(true)
     try {
       const res = await fetch(`${API_BASE}/transactions/assign`, {
@@ -154,7 +154,7 @@ export default function UnclassifiedPage() {
         },
         body: JSON.stringify({
           transaction_ids: [txId],
-          category,
+          category: category || '', 
           memo: memo || '',
           save_rule: false,
         }),
@@ -164,7 +164,7 @@ export default function UnclassifiedPage() {
       setRows(prev =>
         prev.map(r =>
           r.id === txId
-            ? { ...r, category, memo: memo || '', tempCategory: '', tempMemo: '' }
+            ? { ...r, category, memo: memo || '', tempCategory: '' }
             : r
         )
       )
