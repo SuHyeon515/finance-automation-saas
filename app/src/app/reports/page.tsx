@@ -2,12 +2,17 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE, apiAuthHeader } from '@/lib/api'
+import dynamic from 'next/dynamic' // 🔹 동적 import
 import {
   LineChart, Line, Tooltip, XAxis, YAxis, ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts'
-import html2canvas from 'html2canvas'
-import jsPDF from 'jspdf'
 
+// 🔹 PDF 버튼 (SSR 비활성화)
+const ReportPDFButton = dynamic(() => import('@/components/ReportPDFButton'), { ssr: false })
+
+// ============================
+// 공용 포맷 함수
+// ============================
 const formatCurrency = (n: number) =>
   (n ?? 0).toLocaleString('ko-KR', { style: 'currency', currency: 'KRW' })
 
@@ -20,6 +25,9 @@ const formatShortNumber = (num: number) => {
   return String(num)
 }
 
+// ============================
+// 리포트 메인 페이지
+// ============================
 export default function ReportsPage() {
   const now = new Date()
   const [year, setYear] = useState(now.getFullYear())
@@ -33,9 +41,9 @@ export default function ReportsPage() {
   const [endMonth, setEndMonth] = useState(month)
   const reportRef = useRef<HTMLDivElement>(null)
 
-  /* ===========================
-     초기 데이터
-  ============================ */
+  // ===========================
+  // 초기 데이터
+  // ===========================
   useEffect(() => {
     const loadBranches = async () => {
       try {
@@ -87,9 +95,9 @@ export default function ReportsPage() {
     loadReport()
   }, [])
 
-  /* ===========================
-     데이터 계산
-  ============================ */
+  // ===========================
+  // 데이터 계산
+  // ===========================
   const fixedRows = useMemo(() => data?.expense_details?.filter((r: any) => r.is_fixed) || [], [data])
   const variableRows = useMemo(() => data?.expense_details?.filter((r: any) => !r.is_fixed) || [], [data])
   const incomeRows = useMemo(() => data?.income_details || [], [data])
@@ -128,77 +136,18 @@ export default function ReportsPage() {
 
   const PIE_COLORS = ['#10b981', '#6366f1', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#f97316', '#22c55e', '#0ea5e9', '#eab308']
 
-  /* ===========================
-     ✅ PDF 전체 페이지 캡처 버전
-  ============================ */
-  const handleDownloadPDF = async () => {
-  if (typeof window === 'undefined') return;
-  if (!reportRef.current) return;
-
-  // ✅ 동적 import (SSR 방지)
-  const html2pdfModule = await import('html2pdf.js');
-  const html2pdf = html2pdfModule.default || html2pdfModule;
-
-  // ✅ window에 html2canvas 강제 주입 (필수!)
-  const html2canvasModule = await import('html2canvas');
-  (window as any).html2canvas = html2canvasModule.default;
-
-  // ✅ 차트 렌더 완료 대기
-  const waitForCharts = () =>
-    new Promise<void>((resolve) => {
-      const check = () => {
-        const charts = document.querySelectorAll('canvas');
-        if (
-          charts.length > 0 &&
-          Array.from(charts).every((c) => c.height > 0 && c.width > 0)
-        )
-          resolve();
-        else setTimeout(check, 500);
-      };
-      check();
-    });
-  await waitForCharts();
-
-  window.scrollTo(0, 0);
-
-  const element = reportRef.current;
-  const title = `${branch || '전체지점'} 리포트`;
-  const fileName = `${title}_${year}_${startMonth}~${endMonth}.pdf`;
-
-  const opt: any = {
-    margin: [10, 15, 10, 15] as [number, number, number, number],
-    filename: fileName,
-    image: { type: 'jpeg', quality: 0.98 },
-    html2canvas: {
-      scale: 2,
-      useCORS: true,
-      backgroundColor: '#ffffff',
-      scrollY: 0,
-      windowWidth: document.documentElement.scrollWidth,
-      windowHeight: document.documentElement.scrollHeight,
-    },
-    jsPDF: { unit: 'mm', format: 'a4', orientation: 'p' },
-    pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', 'table', 'section'] },
-  };
-
-  try {
-    // @ts-ignore
-    await html2pdf().from(element).set(opt).save();
-    console.log('✅ PDF 저장 완료');
-  } catch (e) {
-    console.error('❌ PDF 생성 실패:', e);
-    alert('PDF 생성 중 오류가 발생했습니다.');
-  }
-};
-
-  /* ===========================
-     렌더링
-  ============================ */
+  // ===========================
+  // 렌더링
+  // ===========================
   return (
     <main className="p-6 space-y-8 bg-gray-100 min-h-screen">
       <header className="flex flex-wrap items-end gap-3">
         <h1 className="text-2xl font-bold">📘 리포트 (수입 + 지출)</h1>
-        {!!branch && <span className="ml-2 rounded-full bg-black/80 text-white text-xs px-2 py-1">{branch}</span>}
+        {!!branch && (
+          <span className="ml-2 rounded-full bg-black/80 text-white text-xs px-2 py-1">
+            {branch}
+          </span>
+        )}
       </header>
 
       {/* === 필터 바 === */}
@@ -206,36 +155,64 @@ export default function ReportsPage() {
         <div className="flex flex-wrap gap-4 items-end">
           <div>
             <label className="block text-xs text-gray-500">지점</label>
-            <select className="border rounded px-3 py-2" value={branch} onChange={e => setBranch(e.target.value)}>
+            <select
+              className="border rounded px-3 py-2"
+              value={branch}
+              onChange={e => setBranch(e.target.value)}
+            >
               <option value="">전체</option>
-              {branches.map(b => <option key={b}>{b}</option>)}
+              {branches.map(b => (
+                <option key={b}>{b}</option>
+              ))}
             </select>
           </div>
 
           <div>
             <label className="block text-xs text-gray-500">연도</label>
-            <input type="number" className="border rounded px-3 py-2 w-24" value={year} onChange={e => setYear(Number(e.target.value))} />
+            <input
+              type="number"
+              className="border rounded px-3 py-2 w-24"
+              value={year}
+              onChange={e => setYear(Number(e.target.value))}
+            />
           </div>
 
           <div>
             <label className="block text-xs text-gray-500">시작 월</label>
-            <input type="number" min={1} max={12} className="border rounded px-3 py-2 w-20"
-                   value={startMonth} onChange={e => setStartMonth(Number(e.target.value))} />
+            <input
+              type="number"
+              min={1}
+              max={12}
+              className="border rounded px-3 py-2 w-20"
+              value={startMonth}
+              onChange={e => setStartMonth(Number(e.target.value))}
+            />
           </div>
 
           <div>
             <label className="block text-xs text-gray-500">종료 월</label>
-            <input type="number" min={startMonth} max={12} className="border rounded px-3 py-2 w-20"
-                   value={endMonth} onChange={e => setEndMonth(Number(e.target.value))} />
+            <input
+              type="number"
+              min={startMonth}
+              max={12}
+              className="border rounded px-3 py-2 w-20"
+              value={endMonth}
+              onChange={e => setEndMonth(Number(e.target.value))}
+            />
           </div>
 
-          <button onClick={loadReport} className="ml-auto bg-black text-white rounded px-4 py-2 hover:opacity-80">
+          <button
+            onClick={loadReport}
+            className="ml-auto bg-black text-white rounded px-4 py-2 hover:opacity-80"
+          >
             조회
           </button>
 
-          <button onClick={handleDownloadPDF} className="bg-red-600 text-white rounded px-4 py-2 hover:opacity-80">
-            📄 PDF로 저장
-          </button>
+          {/* ✅ PDF 저장 버튼 */}
+          <ReportPDFButton
+            elementId="report-container"
+            title={`${branch || '전체지점'}_${year}_${startMonth}~${endMonth}_리포트`}
+          />
         </div>
 
         {data && (
@@ -243,7 +220,9 @@ export default function ReportsPage() {
             {stats.map((s, i) => (
               <div key={i} className={`rounded-lg ${s.bg} border p-4`}>
                 <div className="text-xs text-gray-500">{s.label}</div>
-                <div className={`text-lg font-bold ${s.color}`}>{formatCurrency(s.value)}</div>
+                <div className={`text-lg font-bold ${s.color}`}>
+                  {formatCurrency(s.value)}
+                </div>
               </div>
             ))}
           </div>
@@ -254,21 +233,63 @@ export default function ReportsPage() {
       {error && <p className="text-red-500">{error}</p>}
 
       {data && (
-        <div ref={reportRef} className="space-y-10 bg-white p-6 rounded-xl">
+        <div id="report-container" ref={reportRef} className="space-y-10 bg-white p-6 rounded-xl">
           {[
-            { title: '📈 수입', colorText: 'text-green-700', stroke: '#16a34a', rows: incomeRows, chartData: mergeUnclassified((data?.by_category || []).filter((v: any) => v.sum > 0).map((v: any) => ({ category: v.category || '미분류', amount: v.sum })), 'category'), tableColor: 'text-green-600' },
-            { title: '🏠 고정지출', colorText: 'text-indigo-700', stroke: '#4f46e5', rows: fixedRows, chartData: mergeUnclassified(fixedRows, 'category'), tableColor: 'text-indigo-600' },
-            { title: '🚗 변동지출', colorText: 'text-orange-700', stroke: '#f97316', rows: variableRows, chartData: mergeUnclassified(variableRows, 'category'), tableColor: 'text-orange-600' }
+            {
+              title: '📈 수입',
+              colorText: 'text-green-700',
+              stroke: '#16a34a',
+              rows: incomeRows,
+              chartData: mergeUnclassified(
+                (data?.by_category || [])
+                  .filter((v: any) => v.sum > 0)
+                  .map((v: any) => ({
+                    category: v.category || '미분류',
+                    amount: v.sum,
+                  })),
+                'category'
+              ),
+              tableColor: 'text-green-600',
+            },
+            {
+              title: '🏠 고정지출',
+              colorText: 'text-indigo-700',
+              stroke: '#4f46e5',
+              rows: fixedRows,
+              chartData: mergeUnclassified(fixedRows, 'category'),
+              tableColor: 'text-indigo-600',
+            },
+            {
+              title: '🚗 변동지출',
+              colorText: 'text-orange-700',
+              stroke: '#f97316',
+              rows: variableRows,
+              chartData: mergeUnclassified(variableRows, 'category'),
+              tableColor: 'text-orange-600',
+            },
           ].map((blk, idx) => (
-            <section key={idx} className="bg-white border rounded-xl shadow-sm p-6 space-y-6">
+            <section
+              key={idx}
+              className="bg-white border rounded-xl shadow-sm p-6 space-y-6"
+            >
               <h2 className={`text-xl font-semibold ${blk.colorText}`}>{blk.title}</h2>
 
               <div className="flex flex-col md:flex-row items-start gap-6">
                 <div className="flex-1">
                   <ResponsiveContainer width="100%" height={300}>
                     <PieChart>
-                      <Pie data={blk.chartData.map(d => ({ name: d.category, value: d.amount }))} dataKey="value" nameKey="name" outerRadius={110}
-                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                      <Pie
+                        data={blk.chartData.map(d => ({
+                          name: d.category,
+                          value: d.amount,
+                        }))}
+                        dataKey="value"
+                        nameKey="name"
+                        outerRadius={110}
+                        label={({ name, percent }) =>
+                          `${name} ${(percent * 100).toFixed(0)}%`
+                        }
+                      >
                         {blk.chartData.map((_: any, i: number) => (
                           <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                         ))}
@@ -289,7 +310,10 @@ export default function ReportsPage() {
                     </thead>
                     <tbody>
                       {(() => {
-                        const total = blk.chartData.reduce((s: number, v: any) => s + v.amount, 0)
+                        const total = blk.chartData.reduce(
+                          (s: number, v: any) => s + v.amount,
+                          0
+                        )
                         return (
                           <>
                             {blk.chartData.map((r: any, i: number) => {
@@ -297,15 +321,27 @@ export default function ReportsPage() {
                               return (
                                 <tr key={i}>
                                   <td className="p-2 border text-gray-800">{r.category}</td>
-                                  <td className="p-2 border text-right text-gray-500">{percent.toFixed(2)}%</td>
-                                  <td className={`p-2 border text-right ${blk.tableColor}`}>{formatCurrency(r.amount)}</td>
+                                  <td className="p-2 border text-right text-gray-500">
+                                    {percent.toFixed(2)}%
+                                  </td>
+                                  <td
+                                    className={`p-2 border text-right ${blk.tableColor}`}
+                                  >
+                                    {formatCurrency(r.amount)}
+                                  </td>
                                 </tr>
                               )
                             })}
                             <tr className="bg-gray-100 font-semibold">
                               <td className="p-2 border text-gray-900">합계</td>
-                              <td className="p-2 border text-right text-gray-700">100.00%</td>
-                              <td className={`p-2 border text-right ${blk.tableColor}`}>{formatCurrency(total)}</td>
+                              <td className="p-2 border text-right text-gray-700">
+                                100.00%
+                              </td>
+                              <td
+                                className={`p-2 border text-right ${blk.tableColor}`}
+                              >
+                                {formatCurrency(total)}
+                              </td>
                             </tr>
                           </>
                         )
@@ -333,15 +369,24 @@ export default function ReportsPage() {
                           <td className="p-2">{r.tx_date}</td>
                           <td className="p-2">{r.description}</td>
                           <td className="p-2">{r.category || '미분류'}</td>
-                          <td className={`p-2 text-right ${blk.tableColor}`}>
+                          <td
+                            className={`p-2 text-right ${blk.tableColor}`}
+                          >
                             {formatCurrency(Math.abs(r.amount))}
                           </td>
-                          <td className="p-2 text-gray-600">{r.memo || '-'}</td>
+                          <td className="p-2 text-gray-600">
+                            {r.memo || '-'}
+                          </td>
                         </tr>
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={5} className="text-center text-gray-400 p-3">내역 없음</td>
+                        <td
+                          colSpan={5}
+                          className="text-center text-gray-400 p-3"
+                        >
+                          내역 없음
+                        </td>
                       </tr>
                     )}
                   </tbody>
