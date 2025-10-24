@@ -8,9 +8,6 @@ import {
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
 
-/* ===========================
-   포맷터
-=========================== */
 const formatCurrency = (n: number) =>
   (n ?? 0).toLocaleString('ko-KR', { style: 'currency', currency: 'KRW' })
 
@@ -23,9 +20,6 @@ const formatShortNumber = (num: number) => {
   return String(num)
 }
 
-/* ===========================
-   리포트 메인 컴포넌트
-=========================== */
 export default function ReportsPage() {
   const now = new Date()
   const [year, setYear] = useState(now.getFullYear())
@@ -39,7 +33,9 @@ export default function ReportsPage() {
   const [endMonth, setEndMonth] = useState(month)
   const reportRef = useRef<HTMLDivElement>(null)
 
-  /* ========== 지점 불러오기 ========== */
+  /* ===========================
+     초기 데이터
+  ============================ */
   useEffect(() => {
     const loadBranches = async () => {
       try {
@@ -55,7 +51,6 @@ export default function ReportsPage() {
     loadBranches()
   }, [])
 
-  /* ========== 리포트 불러오기 ========== */
   const buildReportBody = () => ({
     year,
     branch,
@@ -92,7 +87,9 @@ export default function ReportsPage() {
     loadReport()
   }, [])
 
-  /* ========== 데이터 정리 ========== */
+  /* ===========================
+     데이터 계산
+  ============================ */
   const fixedRows = useMemo(() => data?.expense_details?.filter((r: any) => r.is_fixed) || [], [data])
   const variableRows = useMemo(() => data?.expense_details?.filter((r: any) => !r.is_fixed) || [], [data])
   const incomeRows = useMemo(() => data?.income_details || [], [data])
@@ -132,39 +129,46 @@ export default function ReportsPage() {
   const PIE_COLORS = ['#10b981', '#6366f1', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#f97316', '#22c55e', '#0ea5e9', '#eab308']
 
   /* ===========================
-     ✅ PDF 저장 기능 (한글+페이지 정리)
+     ✅ PDF 전체 페이지 캡처 버전
   ============================ */
   const handleDownloadPDF = async () => {
     if (!reportRef.current) return
 
+    const element = reportRef.current
+    const canvas = await html2canvas(element, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      scrollY: -window.scrollY,
+    })
+
+    const imgData = canvas.toDataURL('image/png')
     const pdf = new jsPDF('p', 'mm', 'a4')
+
+    const pdfWidth = pdf.internal.pageSize.getWidth()
+    const pdfHeight = pdf.internal.pageSize.getHeight()
+    const imgWidth = pdfWidth
+    const imgHeight = (canvas.height * pdfWidth) / canvas.width
+
+    let heightLeft = imgHeight
+    let position = 0
+
     const title = `${branch || '전체지점'} 리포트`
     const dateRange = `${year}년 ${startMonth}월 ~ ${endMonth}월`
     const created = `생성일자: ${new Date().toLocaleDateString()}`
 
-    const sections = Array.from(reportRef.current.children)
-    for (let i = 0; i < sections.length; i++) {
-      const section = sections[i] as HTMLElement
-      const canvas = await html2canvas(section, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: '#ffffff',
-      })
-      const imgData = canvas.toDataURL('image/png')
-      const imgWidth = 210
-      const imgHeight = (canvas.height * imgWidth) / canvas.width
-
-      // 헤더
+    while (heightLeft > 0) {
       pdf.setFontSize(14)
       pdf.text(`📊 ${title}`, 10, 15)
       pdf.setFontSize(10)
       pdf.text(dateRange, 10, 22)
       pdf.text(created, 10, 28)
 
-      // 이미지 본문
-      pdf.addImage(imgData, 'PNG', 0, 35, imgWidth, imgHeight)
+      pdf.addImage(imgData, 'PNG', 0, position - 30, imgWidth, imgHeight)
+      heightLeft -= pdfHeight
+      position -= pdfHeight
 
-      if (i < sections.length - 1) pdf.addPage()
+      if (heightLeft > 0) pdf.addPage()
     }
 
     pdf.save(`${title}_${year}_${startMonth}~${endMonth}.pdf`)
@@ -180,7 +184,7 @@ export default function ReportsPage() {
         {!!branch && <span className="ml-2 rounded-full bg-black/80 text-white text-xs px-2 py-1">{branch}</span>}
       </header>
 
-      {/* === 필터 === */}
+      {/* === 필터 바 === */}
       <section className="border rounded-xl p-4 bg-white shadow-sm">
         <div className="flex flex-wrap gap-4 items-end">
           <div>
@@ -190,16 +194,18 @@ export default function ReportsPage() {
               {branches.map(b => <option key={b}>{b}</option>)}
             </select>
           </div>
+
           <div>
             <label className="block text-xs text-gray-500">연도</label>
-            <input type="number" className="border rounded px-3 py-2 w-24"
-                   value={year} onChange={e => setYear(Number(e.target.value))} />
+            <input type="number" className="border rounded px-3 py-2 w-24" value={year} onChange={e => setYear(Number(e.target.value))} />
           </div>
+
           <div>
             <label className="block text-xs text-gray-500">시작 월</label>
             <input type="number" min={1} max={12} className="border rounded px-3 py-2 w-20"
                    value={startMonth} onChange={e => setStartMonth(Number(e.target.value))} />
           </div>
+
           <div>
             <label className="block text-xs text-gray-500">종료 월</label>
             <input type="number" min={startMonth} max={12} className="border rounded px-3 py-2 w-20"
@@ -209,6 +215,7 @@ export default function ReportsPage() {
           <button onClick={loadReport} className="ml-auto bg-black text-white rounded px-4 py-2 hover:opacity-80">
             조회
           </button>
+
           <button onClick={handleDownloadPDF} className="bg-red-600 text-white rounded px-4 py-2 hover:opacity-80">
             📄 PDF로 저장
           </button>
@@ -230,13 +237,13 @@ export default function ReportsPage() {
       {error && <p className="text-red-500">{error}</p>}
 
       {data && (
-        <div ref={reportRef} className="space-y-10">
+        <div ref={reportRef} className="space-y-10 bg-white p-6 rounded-xl">
           {[
             { title: '📈 수입', colorText: 'text-green-700', stroke: '#16a34a', rows: incomeRows, chartData: mergeUnclassified((data?.by_category || []).filter((v: any) => v.sum > 0).map((v: any) => ({ category: v.category || '미분류', amount: v.sum })), 'category'), tableColor: 'text-green-600' },
             { title: '🏠 고정지출', colorText: 'text-indigo-700', stroke: '#4f46e5', rows: fixedRows, chartData: mergeUnclassified(fixedRows, 'category'), tableColor: 'text-indigo-600' },
             { title: '🚗 변동지출', colorText: 'text-orange-700', stroke: '#f97316', rows: variableRows, chartData: mergeUnclassified(variableRows, 'category'), tableColor: 'text-orange-600' }
           ].map((blk, idx) => (
-            <section key={idx} className="bg-white rounded-xl border shadow-sm p-6 space-y-6">
+            <section key={idx} className="bg-white border rounded-xl shadow-sm p-6 space-y-6">
               <h2 className={`text-xl font-semibold ${blk.colorText}`}>{blk.title}</h2>
 
               <div className="flex flex-col md:flex-row items-start gap-6">
