@@ -132,47 +132,53 @@ export default function ReportsPage() {
      ✅ PDF 전체 페이지 캡처 버전
   ============================ */
   const handleDownloadPDF = async () => {
-    if (!reportRef.current) return
+  if (!reportRef.current) return
 
-    const element = reportRef.current
-    const canvas = await html2canvas(element, {
-      scale: 2,
-      useCORS: true,
-      backgroundColor: '#ffffff',
-      scrollY: -window.scrollY,
-    })
+  const element = reportRef.current
+  // ✅ scale은 1.5~2가 적당 (너무 크면 base64 잘림)
+  const canvas = await html2canvas(element, {
+    scale: 2,
+    useCORS: true,
+    backgroundColor: '#ffffff',
+    scrollY: -window.scrollY,
+    logging: false,
+  })
 
-    const imgData = canvas.toDataURL('image/png')
-    const pdf = new jsPDF('p', 'mm', 'a4')
+  // ✅ PNG → JPEG (PNG signature 에러 방지)
+  const imgData = canvas.toDataURL('image/jpeg', 1.0)
 
-    const pdfWidth = pdf.internal.pageSize.getWidth()
-    const pdfHeight = pdf.internal.pageSize.getHeight()
-    const imgWidth = pdfWidth
-    const imgHeight = (canvas.height * pdfWidth) / canvas.width
+  const pdf = new jsPDF('p', 'mm', 'a4')
+  const pdfWidth = pdf.internal.pageSize.getWidth()
+  const pdfHeight = pdf.internal.pageSize.getHeight()
+  const imgWidth = pdfWidth
+  const imgHeight = (canvas.height * pdfWidth) / canvas.width
 
-    let heightLeft = imgHeight
-    let position = 0
+  let heightLeft = imgHeight
+  let position = 0
 
-    const title = `${branch || '전체지점'} 리포트`
-    const dateRange = `${year}년 ${startMonth}월 ~ ${endMonth}월`
-    const created = `생성일자: ${new Date().toLocaleDateString()}`
+  const title = `${branch || '전체지점'} 리포트`
+  const dateRange = `${year}년 ${startMonth}월 ~ ${endMonth}월`
+  const created = `생성일자: ${new Date().toLocaleDateString()}`
 
-    while (heightLeft > 0) {
-      pdf.setFontSize(14)
-      pdf.text(`📊 ${title}`, 10, 15)
-      pdf.setFontSize(10)
-      pdf.text(dateRange, 10, 22)
-      pdf.text(created, 10, 28)
+  while (heightLeft > 0) {
+    // ✅ 상단 헤더
+    pdf.setFontSize(14)
+    pdf.text(`📊 ${title}`, 10, 15)
+    pdf.setFontSize(10)
+    pdf.text(dateRange, 10, 22)
+    pdf.text(created, 10, 28)
 
-      pdf.addImage(imgData, 'PNG', 0, position - 30, imgWidth, imgHeight)
-      heightLeft -= pdfHeight
-      position -= pdfHeight
+    // ✅ 이미지 삽입 (JPEG)
+    pdf.addImage(imgData, 'JPEG', 0, position - 30, imgWidth, imgHeight)
 
-      if (heightLeft > 0) pdf.addPage()
-    }
+    heightLeft -= pdfHeight
+    position -= pdfHeight
 
-    pdf.save(`${title}_${year}_${startMonth}~${endMonth}.pdf`)
+    if (heightLeft > 0) pdf.addPage()
   }
+
+  pdf.save(`${title}_${year}_${startMonth}~${endMonth}.pdf`)
+}
 
   /* ===========================
      렌더링
