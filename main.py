@@ -1025,25 +1025,37 @@ async def assign_categories(
     authorization: Optional[str] = Header(None)
 ):
     user_id = await get_user_id(authorization)
-    print("🧾 [assign] payload:", payload.model_dump())
+    data = payload.model_dump()
+    print("🧾 [assign] payload:", data)
+
     if not payload.transaction_ids:
         return {"ok": True, "updated": 0}
 
+    # ✅ 필드 업데이트 준비
     update_fields = {
         "category": payload.category or "미분류",
         "category_l1": payload.category_l1,
         "category_l2": payload.category_l2,
         "category_l3": payload.category_l3,
-        "is_fixed": payload.is_fixed,
     }
 
-    # ✅ memo 필드가 payload에 있으면 업데이트 포함
+    # ✅ memo 필드가 있으면 포함
     if hasattr(payload, "memo"):
         update_fields["memo"] = getattr(payload, "memo") or ""
 
-    for tid in payload.transaction_ids:
-        supabase.table("transactions").update(update_fields).eq("user_id", user_id).eq("id", tid).execute()
+    # ✅ is_fixed가 명시적으로 전달된 경우에만 포함
+    if "is_fixed" in data and data["is_fixed"] is not None:
+        update_fields["is_fixed"] = data["is_fixed"]
 
+    # === 트랜잭션 업데이트 ===
+    for tid in payload.transaction_ids:
+        supabase.table("transactions") \
+            .update(update_fields) \
+            .eq("user_id", user_id) \
+            .eq("id", tid) \
+            .execute()
+
+    # === 룰 저장 ===
     if payload.save_rule:
         sample = (
             supabase.table("transactions")
@@ -1054,17 +1066,25 @@ async def assign_categories(
             .execute()
             .data
         )
+
         kw = (sample.get("vendor_normalized") or sample.get("description") or sample.get("memo") or "").strip()
+
         if kw:
-            supabase.table("rules").insert({
+            rule_data = {
                 "user_id": user_id,
                 "keyword": kw,
                 "target": "any",
                 "category": payload.category or "미분류",
-                "is_fixed": payload.is_fixed,
+                "is_fixed": payload.is_fixed if "is_fixed" in data and data["is_fixed"] is not None else None,
                 "is_active": True,
                 "priority": 100,
-            }).execute()
+            }
+
+            # ✅ None 값은 제거하고 삽입 (Supabase에서 에러 방지)
+            clean_rule_data = {k: v for k, v in rule_data.items() if v is not None}
+            supabase.table("rules").insert(clean_rule_data).execute()
+
+    print(f"✅ [assign] update_fields={update_fields}")
     return {"ok": True, "updated": len(payload.transaction_ids)}
 
 # === 리포트 ===
