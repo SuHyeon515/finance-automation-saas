@@ -759,6 +759,7 @@ async def list_uploads(
 
 @app.post("/transactions/mark_fixed")
 async def mark_fixed(data: dict, authorization: Optional[str] = Header(None)):
+    print("📥 mark_fixed called:", data)
     try:
         # ✅ 토큰에서 user_id 추출
         user_id = await get_user_id(authorization)
