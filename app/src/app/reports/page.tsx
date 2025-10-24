@@ -315,21 +315,33 @@ export default function ReportsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {blk.chartData.map((r: any, i: number) => {
+                      {(() => {
                         const total = blk.chartData.reduce((s: number, v: any) => s + v.amount, 0)
-                        const percent = total ? (r.amount / total) * 100 : 0
                         return (
-                          <tr key={i}>
-                            <td className="p-2 border text-gray-800">{r.category}</td>
-                            <td className="p-2 border text-right text-gray-500">{percent.toFixed(2)}%</td>
-                            <td className={`p-2 border text-right ${blk.tableColor}`}>{formatCurrency(r.amount)}</td>
-                          </tr>
+                          <>
+                            {blk.chartData.map((r: any, i: number) => {
+                              const percent = total ? (r.amount / total) * 100 : 0
+                              return (
+                                <tr key={i}>
+                                  <td className="p-2 border text-gray-800">{r.category}</td>
+                                  <td className="p-2 border text-right text-gray-500">{percent.toFixed(2)}%</td>
+                                  <td className={`p-2 border text-right ${blk.tableColor}`}>{formatCurrency(r.amount)}</td>
+                                </tr>
+                              )
+                            })}
+
+                            {/* ✅ 총합 행 */}
+                            <tr className="bg-gray-100 font-semibold">
+                              <td className="p-2 border text-gray-900">합계</td>
+                              <td className="p-2 border text-right text-gray-700">100.00%</td>
+                              <td className={`p-2 border text-right ${blk.tableColor}`}>{formatCurrency(total)}</td>
+                            </tr>
+                          </>
                         )
-                      })}
+                      })()}
                     </tbody>
                   </table>
                 </div>
-              </div>
 
               {/* ✅ 라인그래프 + 거래 상세표 기존 유지 */}
               <div className="grid sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
