@@ -17,45 +17,55 @@ export default function ReportPDFButton({ elementId, title }: Props) {
       return
     }
 
-    // ✅ 화면 맨 위로 스크롤
+    console.log('📸 렌더링 캡처 시작')
+
+    // ✅ 렌더 안정화 (Recharts 등 캔버스 완성 대기)
+    await new Promise(res => setTimeout(res, 1200))
     window.scrollTo(0, 0)
-    await new Promise(res => setTimeout(res, 1000)) // 렌더링 대기
 
     const pdf = new jsPDF('p', 'mm', 'a4')
     const pdfWidth = pdf.internal.pageSize.getWidth()
     const pdfHeight = pdf.internal.pageSize.getHeight()
 
-    // ✅ 캔버스 생성 (정확히 렌더된 이미지)
-    const canvas = await html2canvas(el, {
-      scale: 2,
-      useCORS: true,
-      allowTaint: true,
-      backgroundColor: '#ffffff',
-      scrollX: 0,
-      scrollY: 0,
-      windowWidth: document.documentElement.scrollWidth,
-      windowHeight: document.documentElement.scrollHeight,
-    })
+    try {
+      // ✅ html2canvas 고급 옵션
+      const canvas = await html2canvas(el, {
+        scale: 2,
+        backgroundColor: '#ffffff',
+        useCORS: true,
+        allowTaint: true,
+        foreignObjectRendering: true,
+        logging: false,
+        scrollX: 0,
+        scrollY: 0,
+        windowWidth: document.documentElement.scrollWidth,
+        windowHeight: document.documentElement.scrollHeight,
+      })
 
-    const imgData = canvas.toDataURL('image/jpeg', 1.0)
-    const imgWidth = pdfWidth
-    const imgHeight = (canvas.height * pdfWidth) / canvas.width
+      console.log('✅ 캡처 완료, PDF 변환 중...')
 
-    // ✅ 페이지 분할 (높이가 A4를 초과하면 자동 추가)
-    let position = 0
-    let remainingHeight = imgHeight
+      const imgData = canvas.toDataURL('image/jpeg', 1.0)
+      const imgWidth = pdfWidth
+      const imgHeight = (canvas.height * pdfWidth) / canvas.width
 
-    while (remainingHeight > 0) {
-      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight)
-      remainingHeight -= pdfHeight
-      if (remainingHeight > 0) {
-        pdf.addPage()
-        position = -remainingHeight + 10
+      let heightLeft = imgHeight
+      let position = 0
+
+      while (heightLeft > 0) {
+        pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight)
+        heightLeft -= pdfHeight
+        if (heightLeft > 0) {
+          pdf.addPage()
+          position -= pdfHeight
+        }
       }
-    }
 
-    pdf.save(`${title}.pdf`)
-    console.log('✅ PDF 저장 완료 (수동 캡처)')
+      pdf.save(`${title}.pdf`)
+      console.log('✅ PDF 저장 완료')
+    } catch (err) {
+      console.error('❌ PDF 생성 오류:', err)
+      alert('PDF 생성 중 오류가 발생했습니다. 콘솔을 확인하세요.')
+    }
   }, [elementId, title])
 
   return (
