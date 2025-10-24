@@ -1216,14 +1216,16 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     income_details = (
         df[df["amount"] > 0]
         .sort_values("tx_date", ascending=False)
-        [["tx_date", "description", "amount", "category", "is_fixed"]]
+        [["tx_date", "description", "amount", "category", "memo", "is_fixed"]]
+        .fillna({"memo": ""})
         .to_dict("records")
     )
 
     expense_details = (
         df[df["amount"] < 0]
         .sort_values("tx_date", ascending=False)
-        [["tx_date", "description", "amount", "category", "is_fixed"]]
+        [["tx_date", "description", "amount", "category", "memo", "is_fixed"]]
+        .fillna({"memo": ""})
         .to_dict("records")
     )
 
