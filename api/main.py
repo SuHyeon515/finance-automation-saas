@@ -758,13 +758,36 @@ async def list_uploads(
     }
 
 @app.post("/transactions/mark_fixed")
-async def mark_fixed(data: dict):
-    tx_id = data.get("transaction_id")
-    is_fixed = data.get("is_fixed")
-    if not tx_id:
-        raise HTTPException(status_code=400, detail="transaction_id required")
-    supabase.table("transactions").update({"is_fixed": is_fixed}).eq("id", tx_id).execute()
-    return {"success": True, "id": tx_id, "is_fixed": is_fixed}
+async def mark_fixed(data: dict, authorization: Optional[str] = Header(None)):
+    try:
+        # ✅ 토큰에서 user_id 추출
+        user_id = await get_user_id(authorization)
+
+        tx_id = data.get("transaction_id")
+        is_fixed = data.get("is_fixed")
+
+        if not tx_id:
+            raise HTTPException(status_code=400, detail="transaction_id required")
+
+        # ✅ Supabase 업데이트 (본인 데이터만 수정 가능)
+        res = (
+            supabase.table("transactions")
+            .update({"is_fixed": is_fixed})
+            .eq("id", tx_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+        if not res.data:
+            print(f"⚠️ is_fixed 업데이트 실패: tx_id={tx_id}, user_id={user_id}")
+            raise HTTPException(status_code=404, detail="Transaction not found or unauthorized")
+
+        print(f"✅ is_fixed 업데이트 완료: tx_id={tx_id}, user_id={user_id}, is_fixed={is_fixed}")
+        return {"success": True, "id": tx_id, "is_fixed": is_fixed}
+
+    except Exception as e:
+        print(f"❌ mark_fixed 오류: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ✅ 업로드 삭제 API
 @app.delete("/uploads/{upload_id}")
