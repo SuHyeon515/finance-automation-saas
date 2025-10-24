@@ -169,7 +169,7 @@ export default function ReportsPage() {
   const handleDownloadPDF = async () => {
     if (!reportRef.current) return
     const element = reportRef.current
-    const canvas = await html2canvas(element, { scale: 2, useCORS: true })
+    const canvas = await html2canvas(element, { scale: 3, useCORS: true })
     const imgData = canvas.toDataURL('image/png')
 
     const pdf = new jsPDF('p', 'mm', 'a4')
@@ -267,7 +267,7 @@ export default function ReportsPage() {
 
       {/* === 본문 === */}
       {data && (
-        <div className="space-y-10">
+        <div ref={reportRef} className="space-y-10">
           {/* 수입/고정/변동지출 섹션 */}
           {[
             {
