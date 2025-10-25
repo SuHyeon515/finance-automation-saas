@@ -881,9 +881,9 @@ async def list_transactions(
     if year and month:
         start = pd.to_datetime(f"{year}-{month:02d}-01")
         end = (start + pd.offsets.MonthEnd(1))
-        # ✅ 한국시간 기준으로 맞춰서 UTC-9h로 변환
-        q = q.gte("tx_date", (start - timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%SZ")) \
-            .lte("tx_date", (end - timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    # ✅ UTC 보정 제거 — Supabase는 문자열 비교로도 충분함
+        q = q.gte("tx_date", start.strftime("%Y-%m-%d")) \
+            .lte("tx_date", end.strftime("%Y-%m-%d"))
     elif year:
         q = q.gte("tx_date", f"{year}-01-01").lt("tx_date", f"{year + 1}-01-01")
 
@@ -1141,7 +1141,8 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         }
 
     # === ✅ 날짜 변환
-    df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce")
+    df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce", utc=True)
+    df["tx_date"] = df["tx_date"].dt.tz_convert("Asia/Seoul").dt.tz_localize(None)
     df = df.dropna(subset=["tx_date"])
 
     # === ✅ [1] 기간 필터링 ===
