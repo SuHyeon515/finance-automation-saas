@@ -1,9 +1,10 @@
 'use client'
 
 import { useParams } from 'next/navigation'
-import { useEffect, useState } from 'react'
-import { API_BASE, apiAuthHeader } from '@/lib/api' // ✅ 인증 헤더 추가
+import { useEffect, useRef, useState } from 'react'
+import { API_BASE, apiAuthHeader } from '@/lib/api'
 import Link from 'next/link'
+import ReportPDFButton from '@/components/ReportPDFButton' // ✅ PDF 버튼 불러오기
 
 export default function AnalysisDetailPage() {
   const { id } = useParams()
@@ -16,7 +17,7 @@ export default function AnalysisDetailPage() {
     const loadDetail = async () => {
       setLoading(true)
       try {
-        const headers = await apiAuthHeader() // ✅ Supabase 토큰 자동 주입
+        const headers = await apiAuthHeader()
         const res = await fetch(`${API_BASE}/analyses/${id}`, {
           headers,
           credentials: 'include',
@@ -44,12 +45,25 @@ export default function AnalysisDetailPage() {
         ← 목록으로 돌아가기
       </Link>
 
-      <h1 className="text-2xl font-semibold">{data.title}</h1>
+      {/* ✅ 상단 제목 + PDF 버튼 */}
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-semibold">{data.title}</h1>
+        {/* ReportPDFButton 재사용 */}
+        <ReportPDFButton
+          elementId="analysis-report" // PDF로 변환할 영역 id
+          title={data.title || `analysis_${id}`}
+        />
+      </div>
+
       <div className="text-gray-500">
         {data.branch} · {new Date(data.created_at).toLocaleString('ko-KR')}
       </div>
 
-      <div className="prose whitespace-pre-wrap bg-white p-6 rounded-lg shadow-sm">
+      {/* ✅ PDF 변환 대상 영역 */}
+      <div
+        id="analysis-report"
+        className="prose whitespace-pre-wrap bg-white p-6 rounded-lg shadow-sm border"
+      >
         {data.result}
       </div>
 
