@@ -1,11 +1,13 @@
 // @ts-nocheck
 'use client'
 
+export const dynamic = 'force-dynamic'  // ✅ 추가
+
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation' // ✅ 추가
 import { API_BASE } from '@/lib/api'
 import { supabase } from '@/lib/supabaseClient'
-
+export const dynamic = 'force-dynamic'  // ✅ 추가
 // ✅ 자동분류 룰 타입
 type Rule = {
   id?: string

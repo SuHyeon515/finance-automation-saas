@@ -2,21 +2,37 @@
 @tailwind components;
 @tailwind utilities;
 
-/* === 전체 컬러 및 폰트 톤 === */
+/* ===========================
+   컬러 시스템 & 타이포그래피
+   =========================== */
 :root {
   color-scheme: light;
-  --color-bg: #f9fafb;
-  --color-text: #1e293b;
-  --color-border: #e5e7eb;
-  --color-primary: #2563eb; /* 밝은 파랑 */
-  --color-primary-hover: #1d4ed8;
+  
+  /* Colors */
+  --color-bg: #fafbfc;
+  --color-text: #0f172a;
+  --color-border: #e2e8f0;
+  --color-primary: #3b82f6;
+  --color-primary-hover: #2563eb;
   --color-card: #ffffff;
   --color-muted: #64748b;
+  --color-accent: #f1f5f9;
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.07);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.08);
+  
+  /* Spacing */
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
 }
-/* ✅ 표 중간 잘림 방지 */
-table, tr, td, th {
-  page-break-inside: avoid;
-}
+
+/* ===========================
+   프린트 최적화
+   =========================== */
 @media print {
   * {
     -webkit-print-color-adjust: exact !important;
@@ -28,70 +44,203 @@ table, tr, td, th {
   }
 
   section {
-    page-break-inside: auto !important;
+    page-break-before: auto;
+    page-break-after: auto;
+    page-break-inside: auto;
   }
 }
-/* ✅ section 단위로 페이지 나눔 */
-section {
-  page-break-before: auto;
-  page-break-after: auto;
-}
+
+/* ===========================
+   기본 스타일
+   =========================== */
 body {
-  @apply bg-[var(--color-bg)] text-[var(--color-text)] font-sans antialiased leading-relaxed;
-  font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  @apply bg-[var(--color-bg)] text-[var(--color-text)] antialiased;
+  font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", 
+               "Malgun Gothic", "Noto Sans KR", sans-serif;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
-/* === 기본 컨테이너 === */
+
+/* ===========================
+   레이아웃
+   =========================== */
 .container {
-  @apply max-w-6xl mx-auto px-5 md:px-8;
+  @apply max-w-6xl mx-auto px-4 sm:px-6 lg:px-8;
 }
 
-/* === 카드 (패널, 섹션) === */
+/* ===========================
+   카드 컴포넌트
+   =========================== */
 .card {
-  @apply bg-[var(--color-card)] rounded-2xl shadow-sm p-6 border border-[var(--color-border)];
+  @apply bg-[var(--color-card)] rounded-[var(--radius-xl)] p-6;
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+  transition: all 0.2s ease;
 }
 
-/* === 버튼 === */
+.card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+/* ===========================
+   버튼
+   =========================== */
 .btn {
-  @apply inline-flex items-center justify-center px-4 py-2.5 rounded-xl font-medium 
-  transition-all duration-200 ease-out select-none;
-  @apply bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)] 
-  focus:ring-2 focus:ring-[var(--color-primary)] focus:ring-offset-2;
+  @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 
+         rounded-[var(--radius-md)] font-medium text-sm
+         transition-all duration-200 ease-out select-none
+         disabled:opacity-50 disabled:cursor-not-allowed;
+  @apply bg-[var(--color-primary)] text-white 
+         hover:bg-[var(--color-primary-hover)] 
+         active:scale-[0.98]
+         focus:ring-2 focus:ring-[var(--color-primary)] focus:ring-offset-2 focus:outline-none;
 }
 
 .btn-outline {
-  @apply inline-flex items-center justify-center px-4 py-2.5 rounded-xl font-medium border 
-  border-[var(--color-border)] text-[var(--color-text)] bg-white hover:bg-gray-50 
-  transition-all duration-200;
+  @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 
+         rounded-[var(--radius-md)] font-medium text-sm
+         border border-[var(--color-border)] 
+         text-[var(--color-text)] bg-white 
+         hover:bg-[var(--color-accent)]
+         active:scale-[0.98]
+         transition-all duration-200
+         focus:ring-2 focus:ring-[var(--color-primary)] focus:ring-offset-2 focus:outline-none;
 }
 
-/* === 입력 필드 === */
-.input, .select, textarea {
-  @apply border border-[var(--color-border)] rounded-lg px-3 py-2 w-full 
-  focus:ring-2 focus:ring-[var(--color-primary)] focus:border-[var(--color-primary)] 
-  outline-none transition duration-150 bg-white placeholder-gray-400;
+/* ===========================
+   폼 요소
+   =========================== */
+.input, 
+.select, 
+textarea {
+  @apply w-full px-3 py-2.5 
+         bg-white border border-[var(--color-border)] 
+         rounded-[var(--radius-md)]
+         text-sm
+         placeholder:text-gray-400
+         transition-all duration-150
+         focus:border-[var(--color-primary)] 
+         focus:ring-2 focus:ring-[var(--color-primary)]/20 
+         focus:outline-none
+         disabled:bg-gray-50 disabled:cursor-not-allowed;
 }
 
-/* === 링크 === */
+textarea {
+  @apply resize-y min-h-[100px];
+}
+
+/* ===========================
+   타이포그래피
+   =========================== */
+h1 { 
+  @apply text-3xl md:text-4xl font-bold text-[var(--color-text)] 
+         tracking-tight leading-tight mb-4; 
+}
+
+h2 { 
+  @apply text-2xl md:text-3xl font-semibold text-[var(--color-text)] 
+         mt-10 mb-4 tracking-tight; 
+}
+
+h3 { 
+  @apply text-xl md:text-2xl font-semibold text-[var(--color-text)] 
+         mt-8 mb-3; 
+}
+
+h4 {
+  @apply text-lg font-semibold text-[var(--color-text)] mt-6 mb-2;
+}
+
+p { 
+  @apply text-[var(--color-muted)] leading-relaxed mb-4; 
+}
+
+.text-muted {
+  @apply text-[var(--color-muted)];
+}
+
+/* ===========================
+   링크
+   =========================== */
 .link {
-  @apply text-[var(--color-primary)] hover:text-[var(--color-primary-hover)] underline-offset-2 hover:underline;
+  @apply text-[var(--color-primary)] 
+         hover:text-[var(--color-primary-hover)] 
+         underline decoration-[var(--color-primary)]/30 
+         underline-offset-2
+         hover:decoration-[var(--color-primary)]
+         transition-all duration-150;
 }
 
-/* === 소제목, 본문 === */
-h1 { @apply text-3xl font-bold text-[var(--color-text)] tracking-tight; }
-h2 { @apply text-2xl font-semibold text-[var(--color-text)] mt-8 mb-4; }
-h3 { @apply text-xl font-semibold text-[var(--color-text)] mt-6 mb-3; }
-p  { @apply text-[var(--color-muted)] leading-relaxed; }
-
-/* === 테이블 === */
+/* ===========================
+   테이블
+   =========================== */
 .table {
-  @apply w-full text-sm border-collapse border border-[var(--color-border)] rounded-lg overflow-hidden;
+  @apply w-full text-sm border-separate border-spacing-0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
 }
+
+.table thead {
+  @apply bg-[var(--color-accent)];
+}
+
 .table th {
-  @apply bg-gray-50 text-left px-3 py-2 font-semibold text-gray-700 border-b border-[var(--color-border)];
+  @apply px-4 py-3 text-left font-semibold text-[var(--color-text)]
+         border-b border-[var(--color-border)]
+         first:pl-6 last:pr-6;
 }
+
 .table td {
-  @apply px-3 py-2 border-b border-[var(--color-border)] text-gray-700;
+  @apply px-4 py-3 text-[var(--color-text)]
+         border-b border-[var(--color-border)]
+         first:pl-6 last:pr-6;
 }
-.table tr:hover td {
-  @apply bg-gray-50;
+
+.table tbody tr {
+  @apply transition-colors duration-150;
+}
+
+.table tbody tr:hover {
+  @apply bg-[var(--color-accent)]/50;
+}
+
+.table tbody tr:last-child td {
+  @apply border-b-0;
+}
+
+/* ===========================
+   유틸리티
+   =========================== */
+.divider {
+  @apply border-t border-[var(--color-border)] my-6;
+}
+
+.badge {
+  @apply inline-flex items-center px-2.5 py-0.5 
+         rounded-full text-xs font-medium
+         bg-[var(--color-accent)] text-[var(--color-text)];
+}
+
+.loading {
+  @apply animate-pulse;
+}
+
+/* 스크롤바 스타일링 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-300 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-gray-400;
 }
