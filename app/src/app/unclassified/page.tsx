@@ -173,7 +173,15 @@ function UnclassifiedInner() {
 
       setRows(prev =>
         prev.map(r =>
-          r.id === txId ? { ...r, category, memo: memo || '' } : r
+          r.id === txId
+            ? {
+                ...r,
+                category,
+                memo: memo || '',
+                // ✅ 메모가 삭제되면 tempMemo도 같이 비움
+                tempMemo: memo === '' ? '' : r.tempMemo ?? memo,
+              }
+            : r
         )
       )
     } catch (e) {
