@@ -229,42 +229,45 @@ export default function ReportsPage() {
           style={{ minWidth: '210mm', maxWidth: '210mm', margin: '0 auto' }}
         >
           {[
-            { title: '📈 수입',
-              colorText: 'text-green-700',
-              rows: incomeRows,
-              chartData: mergeUnclassified(
-                (data?.by_category?.income ?? []).map((v: any) => ({
-                  category: v.category || '미분류',
-                  amount: Math.abs(v.sum || 0),
-                })),
-                'category'
-              ),
-              tableColor: 'text-green-600'
-            },
-            { title: '🏠 고정지출',
-              colorText: 'text-indigo-700',
-              rows: fixedRows,
-              chartData: mergeUnclassified(
-                (data?.by_category?.expense ?? []).map((v: any) => ({
-                  category: v.category || '미분류',
-                  amount: Math.abs(v.sum || 0),
-                })),
-                'category'
-              ),
-              tableColor: 'text-indigo-600'
-            },
-            { title: '🚗 변동지출',
-              colorText: 'text-orange-700',
-              rows: variableRows,
-              chartData: mergeUnclassified(
-                (data?.by_category?.expense ?? []).map((v: any) => ({
-                  category: v.category || '미분류',
-                  amount: Math.abs(v.sum || 0),
-                })),
-                'category'
-              ),
-              tableColor: 'text-orange-600'
-            },
+            {
+                title: '📈 수입',
+                colorText: 'text-green-700',
+                rows: incomeRows,
+                chartData: mergeUnclassified(
+                  (data?.by_category?.income ?? []).map((v: any) => ({
+                    category: v.category || '미분류',
+                    amount: Math.abs(v.sum || 0),
+                  })),
+                  'category'
+                ),
+                tableColor: 'text-green-600',
+              },
+              {
+                title: '🏠 고정지출',
+                colorText: 'text-indigo-700',
+                rows: fixedRows,
+                chartData: mergeUnclassified(
+                  (data?.by_category?.fixed_expense ?? []).map((v: any) => ({
+                    category: v.category || '미분류',
+                    amount: Math.abs(v.sum || 0),
+                  })),
+                  'category'
+                ),
+                tableColor: 'text-indigo-600',
+              },
+              {
+                title: '🚗 변동지출',
+                colorText: 'text-orange-700',
+                rows: variableRows,
+                chartData: mergeUnclassified(
+                  (data?.by_category?.variable_expense ?? []).map((v: any) => ({
+                    category: v.category || '미분류',
+                    amount: Math.abs(v.sum || 0),
+                  })),
+                  'category'
+                ),
+                tableColor: 'text-orange-600',
+              },
           ].map((blk, idx) => (
             <section key={idx} className="bg-white border rounded-xl shadow-sm p-6 space-y-6">
               <h2 className={`text-xl font-semibold ${blk.colorText}`}>{blk.title}</h2>
@@ -349,7 +352,6 @@ export default function ReportsPage() {
                   </table>
                 </div>
               </div>
-
               <div className="overflow-x-auto">
                 <table className="w-full text-sm border border-gray-200 rounded-lg">
                   <thead className="bg-gray-50">
