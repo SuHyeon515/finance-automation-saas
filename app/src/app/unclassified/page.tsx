@@ -1,7 +1,7 @@
 // @ts-nocheck
 'use client'
 
-export const dynamic = 'force-dynamic'  // ✅ 그대로 유지
+export const dynamic = 'force-dynamic'
 
 import { Suspense } from 'react'
 import { useEffect, useMemo, useState } from 'react'
@@ -9,7 +9,6 @@ import { useSearchParams } from 'next/navigation'
 import { API_BASE } from '@/lib/api'
 import { supabase } from '@/lib/supabaseClient'
 
-// ✅ 자동분류 룰 타입
 type Rule = {
   id?: string
   keyword: string
@@ -19,11 +18,8 @@ type Rule = {
   priority?: number
 }
 
-/* ============================================================
-   ✅ 내부 컴포넌트: 실제 동작 코드 (원래 내용 그대로 유지)
-============================================================ */
 function UnclassifiedInner() {
-  const params = useSearchParams() // ✅ URL 쿼리 읽기용
+  const params = useSearchParams()
   const [accessToken, setAccessToken] = useState<string | null>(null)
   const [rows, setRows] = useState<any[]>([])
   const [rules, setRules] = useState<Rule[]>([])
@@ -34,12 +30,10 @@ function UnclassifiedInner() {
   const [branchList, setBranchList] = useState<string[]>([])
   const [selectedBranch, setSelectedBranch] = useState<string>('')
 
-  // ✅ 카테고리 목록
   const [incomeCats, setIncomeCats] = useState<string[]>([])
   const [fixedExpenseCats, setFixedExpenseCats] = useState<string[]>([])
   const [variableExpenseCats, setVariableExpenseCats] = useState<string[]>([])
 
-  // ✅ Supabase 세션 확인
   useEffect(() => {
     const run = async () => {
       const { data: { session } } = await supabase.auth.getSession()
@@ -48,7 +42,6 @@ function UnclassifiedInner() {
     run()
   }, [])
 
-  // ✅ URL 파라미터(branch, year, month) 자동 인식
   useEffect(() => {
     const branch = params.get('branch')
     const year = params.get('year')
@@ -60,7 +53,6 @@ function UnclassifiedInner() {
     }
   }, [params])
 
-  // ✅ 지점 목록 불러오기
   useEffect(() => {
     const fetchBranches = async () => {
       const { data, error } = await supabase.from('branches').select('name').order('name')
@@ -73,7 +65,6 @@ function UnclassifiedInner() {
     fetchBranches()
   }, [])
 
-  // ✅ 카테고리 불러오기
   useEffect(() => {
     const fetchCategories = async () => {
       const { data: { session } } = await supabase.auth.getSession()
@@ -101,7 +92,6 @@ function UnclassifiedInner() {
     fetchCategories()
   }, [])
 
-  // ✅ 거래 데이터 불러오기
   const load = async () => {
     if (!accessToken || !selectedBranch) return
     setLoading(true)
@@ -132,7 +122,6 @@ function UnclassifiedInner() {
     }
   }
 
-  // ✅ 자동 로드
   useEffect(() => {
     if (accessToken && selectedBranch) load()
   }, [accessToken, selectedBranch])
@@ -141,7 +130,6 @@ function UnclassifiedInner() {
     if (accessToken && selectedBranch && selectedMonth) load()
   }, [accessToken, selectedBranch, selectedMonth])
 
-  // ✅ 월별 / 유형 필터
   const monthList = useMemo(() => {
     return Array.from(new Set(rows.map(r => r.tx_date?.slice(0, 7)))).filter(Boolean)
   }, [rows])
@@ -151,10 +139,8 @@ function UnclassifiedInner() {
       .filter(r => r.tx_date?.startsWith(selectedMonth))
       .sort((a, b) => new Date(a.tx_date).getTime() - new Date(b.tx_date).getTime())
 
-    if (filterType === 'in')
-      return arr.filter(r => Number(r.amount) > 0)
-    if (filterType === 'out')
-      return arr.filter(r => Number(r.amount) < 0)
+    if (filterType === 'in') return arr.filter(r => Number(r.amount) > 0)
+    if (filterType === 'out') return arr.filter(r => Number(r.amount) < 0)
     if (filterType === 'unclassified')
       return arr.filter(r => !r.category || r.category.trim() === '' || r.category === '미분류')
     return arr
@@ -166,7 +152,6 @@ function UnclassifiedInner() {
     return { inTotal: p, outTotal: n, net: p + n }
   }, [filteredRows])
 
-  // ✅ 카테고리 + 메모 저장 함수
   const handleAssignWithMemo = async (txId: string, category: string, memo?: string) => {
     if (!txId) return
     setSaving(true)
@@ -188,7 +173,7 @@ function UnclassifiedInner() {
 
       setRows(prev =>
         prev.map(r =>
-          r.id === txId ? { ...r, category, memo: memo || '', tempCategory: '' } : r
+          r.id === txId ? { ...r, category, memo: memo || '', tempMemo: '' } : r
         )
       )
     } catch (e) {
@@ -199,7 +184,6 @@ function UnclassifiedInner() {
     }
   }
 
-  // ✅ 고정/변동 지출 지정
   const handleFixedChange = async (txId: string, isFixed: boolean) => {
     setSaving(true)
     try {
@@ -221,11 +205,56 @@ function UnclassifiedInner() {
     }
   }
 
+  // ✅ 메모 일괄 저장 기능
+  const handleBulkSaveMemos = async () => {
+    const toSave = rows.filter(r => r.tempMemo !== undefined && r.tempMemo !== r.memo)
+    if (toSave.length === 0) {
+      alert('저장할 메모 변경사항이 없습니다.')
+      return
+    }
+
+    if (!confirm(`${toSave.length}개의 메모를 한 번에 저장하시겠습니까?`)) return
+    setSaving(true)
+
+    try {
+      for (const r of toSave) {
+        await fetch(`${API_BASE}/transactions/assign`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            transaction_ids: [r.id],
+            category: r.category || '',
+            memo: r.tempMemo || '',
+            save_rule: false,
+          }),
+        })
+      }
+
+      setRows(prev =>
+        prev.map(r =>
+          r.tempMemo !== undefined && r.tempMemo !== r.memo
+            ? { ...r, memo: r.tempMemo, tempMemo: '' }
+            : r
+        )
+      )
+
+      alert('모든 메모가 성공적으로 저장되었습니다.')
+    } catch (e) {
+      console.error(e)
+      alert('일괄 저장 중 오류 발생')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <main className="p-6 space-y-4">
       <h1 className="text-xl font-bold">🧩 미분류 거래 관리 (고정/변동 지출 포함)</h1>
 
-      {/* ✅ 필터 바 */}
+      {/* 필터 바 */}
       <div className="flex flex-wrap items-center gap-3">
         <select
           className="border rounded px-2 py-1"
@@ -273,133 +302,147 @@ function UnclassifiedInner() {
         </div>
       </div>
 
+      {/* 통계 */}
       <div className="text-sm text-right mt-2">
         💰 수입 <b className="text-green-600">{totals.inTotal.toLocaleString()}</b>원 ·{' '}
         지출 <b className="text-red-600">{totals.outTotal.toLocaleString()}</b>원 ·{' '}
         순이익 <b className="text-blue-600">{totals.net.toLocaleString()}</b>원
       </div>
 
+      {/* 테이블 */}
       {loading && <p>불러오는 중...</p>}
       {!loading && filteredRows.length === 0 && <p>데이터 없음</p>}
       {!loading && filteredRows.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm border border-gray-300 rounded-lg">
-            <thead className="bg-gray-100 sticky top-0">
-              <tr>
-                <th className="p-2 border">날짜</th>
-                <th className="p-2 border">내용</th>
-                <th className="p-2 border text-right">금액</th>
-                <th className="p-2 border">유형</th>
-                <th className="p-2 border">카테고리</th>
-                <th className="p-2 border">메모</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRows.map(r => {
-                const isExpense = Number(r.amount) < 0
-                const catList = isExpense
-                  ? r.is_fixed
-                    ? fixedExpenseCats
-                    : variableExpenseCats
-                  : incomeCats
-                return (
-                  <tr key={r.id} className="border-b align-top">
-                    <td className="p-2">{r.tx_date}</td>
-                    <td className="p-2">{r.description}</td>
-                    <td className={`p-2 text-right font-semibold ${isExpense ? 'text-red-600' : 'text-green-600'}`}>
-                      {Number(r.amount).toLocaleString()}원
-                    </td>
-                    <td className="p-2 text-center">{isExpense ? '지출' : '수입'}</td>
-                    <td className="p-2">
-                      <div className="flex flex-wrap gap-1">
-                        {catList.map(cat => (
-                          <button
-                            key={cat}
-                            className={`px-2 py-1 text-xs rounded border ${
-                              r.category === cat
-                                ? 'bg-indigo-600 text-white border-indigo-600'
-                                : 'bg-gray-100 hover:bg-gray-200 border-gray-300'
-                            }`}
-                            onClick={() => handleAssignWithMemo(r.id, cat, r.memo)}
-                            disabled={saving}
-                          >
-                            {cat}
-                          </button>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="p-2">
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            placeholder="메모 입력"
-                            className="border rounded px-2 py-1 w-[180px]"
-                            value={r.tempMemo ?? r.memo ?? ''}
-                            onChange={e => {
-                              const val = e.target.value
-                              setRows(prev =>
-                                prev.map(item =>
-                                  item.id === r.id ? { ...item, tempMemo: val } : item
-                                )
-                              )
-                            }}
-                          />
-                          <button
-                            className="px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-300"
-                            onClick={() => {
-                              const memo = (r.tempMemo || '').trim()
-                              handleAssignWithMemo(r.id, r.category || '', memo)
-                            }}
-                            disabled={saving}
-                          >
-                            저장
-                          </button>
-                          {r.memo && (
+        <>
+          <div className="overflow-x-auto">
+            {/* 기존 테이블 그대로 유지 */}
+            <table className="w-full text-sm border border-gray-300 rounded-lg">
+              <thead className="bg-gray-100 sticky top-0">
+                <tr>
+                  <th className="p-2 border">날짜</th>
+                  <th className="p-2 border">내용</th>
+                  <th className="p-2 border text-right">금액</th>
+                  <th className="p-2 border">유형</th>
+                  <th className="p-2 border">카테고리</th>
+                  <th className="p-2 border">메모</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRows.map(r => {
+                  const isExpense = Number(r.amount) < 0
+                  const catList = isExpense
+                    ? r.is_fixed
+                      ? fixedExpenseCats
+                      : variableExpenseCats
+                    : incomeCats
+                  return (
+                    <tr key={r.id} className="border-b align-top">
+                      <td className="p-2">{r.tx_date}</td>
+                      <td className="p-2">{r.description}</td>
+                      <td className={`p-2 text-right font-semibold ${isExpense ? 'text-red-600' : 'text-green-600'}`}>
+                        {Number(r.amount).toLocaleString()}원
+                      </td>
+                      <td className="p-2 text-center">{isExpense ? '지출' : '수입'}</td>
+                      <td className="p-2">
+                        <div className="flex flex-wrap gap-1">
+                          {catList.map(cat => (
                             <button
-                              className="px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600 disabled:bg-gray-300"
-                              onClick={() => handleAssignWithMemo(r.id, r.category || '', '')}
+                              key={cat}
+                              className={`px-2 py-1 text-xs rounded border ${
+                                r.category === cat
+                                  ? 'bg-indigo-600 text-white border-indigo-600'
+                                  : 'bg-gray-100 hover:bg-gray-200 border-gray-300'
+                              }`}
+                              onClick={() => handleAssignWithMemo(r.id, cat, r.memo)}
                               disabled={saving}
                             >
-                              삭제
+                              {cat}
                             </button>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="p-2">
+                        <div className="flex flex-col gap-2">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              placeholder="메모 입력"
+                              className="border rounded px-2 py-1 w-[180px]"
+                              value={r.tempMemo ?? r.memo ?? ''}
+                              onChange={e => {
+                                const val = e.target.value
+                                setRows(prev =>
+                                  prev.map(item =>
+                                    item.id === r.id ? { ...item, tempMemo: val } : item
+                                  )
+                                )
+                              }}
+                            />
+                            <button
+                              className="px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-300"
+                              onClick={() => {
+                                const memo = (r.tempMemo || '').trim()
+                                handleAssignWithMemo(r.id, r.category || '', memo)
+                              }}
+                              disabled={saving}
+                            >
+                              저장
+                            </button>
+                            {r.memo && (
+                              <button
+                                className="px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600 disabled:bg-gray-300"
+                                onClick={() => handleAssignWithMemo(r.id, r.category || '', '')}
+                                disabled={saving}
+                              >
+                                삭제
+                              </button>
+                            )}
+                          </div>
+
+                          {isExpense && (
+                            <div className="flex gap-2 text-xs mt-1">
+                              <button
+                                onClick={() => handleFixedChange(r.id, true)}
+                                className={`px-2 py-1 rounded ${r.is_fixed ? 'bg-orange-600 text-white' : 'bg-gray-200 hover:bg-gray-300'}`}
+                                disabled={saving}
+                              >
+                                고정지출
+                              </button>
+                              <button
+                                onClick={() => handleFixedChange(r.id, false)}
+                                className={`px-2 py-1 rounded ${!r.is_fixed ? 'bg-blue-600 text-white' : 'bg-gray-200 hover:bg-gray-300'}`}
+                                disabled={saving}
+                              >
+                                변동지출
+                              </button>
+                            </div>
                           )}
                         </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
 
-                        {isExpense && (
-                          <div className="flex gap-2 text-xs mt-1">
-                            <button
-                              onClick={() => handleFixedChange(r.id, true)}
-                              className={`px-2 py-1 rounded ${r.is_fixed ? 'bg-orange-600 text-white' : 'bg-gray-200 hover:bg-gray-300'}`}
-                              disabled={saving}
-                            >
-                              고정지출
-                            </button>
-                            <button
-                              onClick={() => handleFixedChange(r.id, false)}
-                              className={`px-2 py-1 rounded ${!r.is_fixed ? 'bg-blue-600 text-white' : 'bg-gray-200 hover:bg-gray-300'}`}
-                              disabled={saving}
-                            >
-                              변동지출
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+          {/* ✅ 메모 일괄저장 버튼 */}
+          <div className="text-right mt-6">
+            <button
+              onClick={handleBulkSaveMemos}
+              className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400"
+              disabled={saving}
+            >
+              💾 메모 일괄 저장
+            </button>
+          </div>
+        </>
       )}
     </main>
   )
 }
 
-/* ============================================================
-   ✅ Suspense 래핑 (빌드 오류 방지)
-============================================================ */
+/* Suspense 래핑 (빌드 오류 방지) */
 export default function UnclassifiedPage() {
   return (
     <Suspense fallback={<div className="p-6">로딩 중...</div>}>
