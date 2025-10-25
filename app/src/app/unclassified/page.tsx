@@ -173,7 +173,7 @@ function UnclassifiedInner() {
 
       setRows(prev =>
         prev.map(r =>
-          r.id === txId ? { ...r, category, memo: memo || '', tempMemo: '' } : r
+          r.id === txId ? { ...r, category, memo: memo || '' } : r
         )
       )
     } catch (e) {
@@ -205,7 +205,7 @@ function UnclassifiedInner() {
     }
   }
 
-  // ✅ 메모 일괄 저장 기능
+  // ✅ 메모 일괄 저장 기능 (tempMemo 유지)
   const handleBulkSaveMemos = async () => {
     const toSave = rows.filter(r => r.tempMemo !== undefined && r.tempMemo !== r.memo)
     if (toSave.length === 0) {
@@ -233,10 +233,11 @@ function UnclassifiedInner() {
         })
       }
 
+      // ✅ tempMemo를 그대로 유지하면서 memo만 갱신
       setRows(prev =>
         prev.map(r =>
           r.tempMemo !== undefined && r.tempMemo !== r.memo
-            ? { ...r, memo: r.tempMemo, tempMemo: '' }
+            ? { ...r, memo: r.tempMemo }
             : r
         )
       )
@@ -315,7 +316,6 @@ function UnclassifiedInner() {
       {!loading && filteredRows.length > 0 && (
         <>
           <div className="overflow-x-auto">
-            {/* 기존 테이블 그대로 유지 */}
             <table className="w-full text-sm border border-gray-300 rounded-lg">
               <thead className="bg-gray-100 sticky top-0">
                 <tr>
@@ -442,7 +442,6 @@ function UnclassifiedInner() {
   )
 }
 
-/* Suspense 래핑 (빌드 오류 방지) */
 export default function UnclassifiedPage() {
   return (
     <Suspense fallback={<div className="p-6">로딩 중...</div>}>
