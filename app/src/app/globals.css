@@ -168,12 +168,14 @@ p {
          hover:text-[var(--color-primary-hover)] 
          underline decoration-[var(--color-primary)]
          decoration-1
-         decoration-opacity-30
          underline-offset-2
-         hover:decoration-opacity-100
          transition-all duration-150;
+  text-decoration-color: color-mix(in srgb, var(--color-primary) 30%, transparent);
 }
 
+.link:hover {
+  text-decoration-color: var(--color-primary);
+}
 /* ===========================
    테이블
    =========================== */
