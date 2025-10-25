@@ -205,9 +205,10 @@ p {
 .table tbody tr {
   @apply transition-colors duration-150;
 }
-
 .table tbody tr:hover {
-  @apply bg-[var(--color-accent)]/50;
+  @apply transition-colors duration-150;
+  @apply bg-[var(--color-accent)];
+  background-color: color-mix(in srgb, var(--color-accent) 50%, transparent);
 }
 
 .table tbody tr:last-child td {
