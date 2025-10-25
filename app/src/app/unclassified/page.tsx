@@ -135,8 +135,19 @@ function UnclassifiedInner() {
   }, [rows])
 
   const filteredRows = useMemo(() => {
+    const targetYear = Number(selectedMonth.slice(0, 4))
+    const targetMonth = Number(selectedMonth.slice(5, 7))
+
     const arr = rows
-      .filter(r => r.tx_date?.startsWith(selectedMonth))
+      .filter(r => {
+        if (!r.tx_date) return false
+        const d = new Date(r.tx_date)
+        // ✅ UTC를 한국시간(KST, +9h)으로 보정
+        const local = new Date(d.getTime() + 9 * 60 * 60 * 1000)
+        const y = local.getFullYear()
+        const m = local.getMonth() + 1
+        return y === targetYear && m === targetMonth
+      })
       .sort((a, b) => new Date(a.tx_date).getTime() - new Date(b.tx_date).getTime())
 
     if (filterType === 'in') return arr.filter(r => Number(r.amount) > 0)

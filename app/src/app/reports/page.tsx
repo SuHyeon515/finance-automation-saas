@@ -89,6 +89,21 @@ export default function ReportsPage() {
       result.expense_details ??= []
       result.income_details ??= []
       result.summary ??= { total_in: 0, total_out: 0, net: 0 }
+      // ✅ 한국시간으로 보정된 tx_date 추가
+      if (Array.isArray(result.income_details)) {
+        result.income_details = result.income_details.map((r: any) => {
+          const d = new Date(r.tx_date)
+          const local = new Date(d.getTime() + 9 * 60 * 60 * 1000)
+          return { ...r, tx_date: local.toISOString().slice(0, 10) }
+        })
+      }
+      if (Array.isArray(result.expense_details)) {
+        result.expense_details = result.expense_details.map((r: any) => {
+          const d = new Date(r.tx_date)
+          const local = new Date(d.getTime() + 9 * 60 * 60 * 1000)
+          return { ...r, tx_date: local.toISOString().slice(0, 10) }
+        })
+      }
       setData(result)
     } catch (e: any) {
       setError(e.message || '불러오기 실패')
