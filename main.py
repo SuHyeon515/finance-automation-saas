@@ -44,9 +44,10 @@ origins = [
     "http://localhost:3000"
 ]
 
+# main.py (상단부 CORS 설정 부분)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],       # ✅ 와일드카드 대신 명시
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
