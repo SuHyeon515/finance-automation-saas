@@ -47,12 +47,15 @@ origins = [
 # main.py (상단부 CORS 설정 부분)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=[
+        "https://finance-automation-saas-um91.vercel.app",  # ✅ 실제 Vercel 프론트
+        "https://finance-automation-saas.vercel.app",       # ✅ 다른 도메인 버전
+        "http://localhost:3000"                             # ✅ 로컬 개발용
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # === Helper ===
 def build_download_headers(filename: str) -> dict:
     ascii_fallback = "download.xlsx"
