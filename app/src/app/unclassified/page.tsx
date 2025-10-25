@@ -1,10 +1,11 @@
 // @ts-nocheck
 'use client'
 
-export const dynamic = 'force-dynamic'  // ✅ 추가
+export const dynamic = 'force-dynamic'  // ✅ 그대로 유지
 
+import { Suspense } from 'react'
 import { useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'next/navigation' // ✅ 추가
+import { useSearchParams } from 'next/navigation'
 import { API_BASE } from '@/lib/api'
 import { supabase } from '@/lib/supabaseClient'
 
@@ -18,7 +19,10 @@ type Rule = {
   priority?: number
 }
 
-export default function UnclassifiedPage() {
+/* ============================================================
+   ✅ 내부 컴포넌트: 실제 동작 코드 (원래 내용 그대로 유지)
+============================================================ */
+function UnclassifiedInner() {
   const params = useSearchParams() // ✅ URL 쿼리 읽기용
   const [accessToken, setAccessToken] = useState<string | null>(null)
   const [rows, setRows] = useState<any[]>([])
@@ -51,7 +55,6 @@ export default function UnclassifiedPage() {
     const month = params.get('month')
     if (branch) setSelectedBranch(branch)
     if (year && month) {
-      // yyyy-mm 형태로 변환
       const formatted = `${year}-${String(month).padStart(2, '0')}`
       setSelectedMonth(formatted)
     }
@@ -70,7 +73,7 @@ export default function UnclassifiedPage() {
     fetchBranches()
   }, [])
 
-  // ✅ 카테고리 불러오기 (수입 / 고정지출 / 변동지출)
+  // ✅ 카테고리 불러오기
   useEffect(() => {
     const fetchCategories = async () => {
       const { data: { session } } = await supabase.auth.getSession()
@@ -129,15 +132,13 @@ export default function UnclassifiedPage() {
     }
   }
 
-  // ✅ 자동 로드 (branch + month 모두 있을 때)
+  // ✅ 자동 로드
   useEffect(() => {
     if (accessToken && selectedBranch) load()
   }, [accessToken, selectedBranch])
 
   useEffect(() => {
-    if (accessToken && selectedBranch && selectedMonth) {
-      load()
-    }
+    if (accessToken && selectedBranch && selectedMonth) load()
   }, [accessToken, selectedBranch, selectedMonth])
 
   // ✅ 월별 / 유형 필터
@@ -178,7 +179,7 @@ export default function UnclassifiedPage() {
         },
         body: JSON.stringify({
           transaction_ids: [txId],
-          category: category || '', 
+          category: category || '',
           memo: memo || '',
           save_rule: false,
         }),
@@ -187,9 +188,7 @@ export default function UnclassifiedPage() {
 
       setRows(prev =>
         prev.map(r =>
-          r.id === txId
-            ? { ...r, category, memo: memo || '', tempCategory: '' }
-            : r
+          r.id === txId ? { ...r, category, memo: memo || '', tempCategory: '' } : r
         )
       )
     } catch (e) {
@@ -228,7 +227,6 @@ export default function UnclassifiedPage() {
 
       {/* ✅ 필터 바 */}
       <div className="flex flex-wrap items-center gap-3">
-        {/* ✅ 지점 선택 */}
         <select
           className="border rounded px-2 py-1"
           value={selectedBranch}
@@ -243,7 +241,6 @@ export default function UnclassifiedPage() {
           ))}
         </select>
 
-        {/* ✅ 월 선택 */}
         {selectedBranch && (
           <select
             className="border rounded px-2 py-1"
@@ -256,7 +253,6 @@ export default function UnclassifiedPage() {
           </select>
         )}
 
-        {/* ✅ 필터 버튼 */}
         <div className="flex gap-2 ml-auto">
           <button onClick={() => setFilterType('all')}
             className={`px-3 py-1 rounded ${filterType === 'all' ? 'bg-gray-900 text-white' : 'bg-gray-200'}`}>
@@ -277,14 +273,12 @@ export default function UnclassifiedPage() {
         </div>
       </div>
 
-      {/* ✅ 통계 표시 */}
       <div className="text-sm text-right mt-2">
         💰 수입 <b className="text-green-600">{totals.inTotal.toLocaleString()}</b>원 ·{' '}
         지출 <b className="text-red-600">{totals.outTotal.toLocaleString()}</b>원 ·{' '}
         순이익 <b className="text-blue-600">{totals.net.toLocaleString()}</b>원
       </div>
 
-      {/* ✅ 테이블 */}
       {loading && <p>불러오는 중...</p>}
       {!loading && filteredRows.length === 0 && <p>데이터 없음</p>}
       {!loading && filteredRows.length > 0 && (
@@ -308,7 +302,6 @@ export default function UnclassifiedPage() {
                     ? fixedExpenseCats
                     : variableExpenseCats
                   : incomeCats
-
                 return (
                   <tr key={r.id} className="border-b align-top">
                     <td className="p-2">{r.tx_date}</td>
@@ -317,8 +310,6 @@ export default function UnclassifiedPage() {
                       {Number(r.amount).toLocaleString()}원
                     </td>
                     <td className="p-2 text-center">{isExpense ? '지출' : '수입'}</td>
-
-                    {/* ✅ 카테고리 버튼 */}
                     <td className="p-2">
                       <div className="flex flex-wrap gap-1">
                         {catList.map(cat => (
@@ -337,11 +328,8 @@ export default function UnclassifiedPage() {
                         ))}
                       </div>
                     </td>
-
-                    {/* ✅ 메모 및 고정/변동 버튼 */}
                     <td className="p-2">
                       <div className="flex flex-col gap-2">
-                        {/* 메모 */}
                         <div className="flex items-center gap-2">
                           <input
                             type="text"
@@ -378,7 +366,6 @@ export default function UnclassifiedPage() {
                           )}
                         </div>
 
-                        {/* ✅ 고정/변동 버튼 */}
                         {isExpense && (
                           <div className="flex gap-2 text-xs mt-1">
                             <button
@@ -407,5 +394,16 @@ export default function UnclassifiedPage() {
         </div>
       )}
     </main>
+  )
+}
+
+/* ============================================================
+   ✅ Suspense 래핑 (빌드 오류 방지)
+============================================================ */
+export default function UnclassifiedPage() {
+  return (
+    <Suspense fallback={<div className="p-6">로딩 중...</div>}>
+      <UnclassifiedInner />
+    </Suspense>
   )
 }
