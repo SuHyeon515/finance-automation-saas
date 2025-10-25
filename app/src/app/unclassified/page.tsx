@@ -2,6 +2,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation' // ✅ 추가
 import { API_BASE } from '@/lib/api'
 import { supabase } from '@/lib/supabaseClient'
 
@@ -16,6 +17,7 @@ type Rule = {
 }
 
 export default function UnclassifiedPage() {
+  const params = useSearchParams() // ✅ URL 쿼리 읽기용
   const [accessToken, setAccessToken] = useState<string | null>(null)
   const [rows, setRows] = useState<any[]>([])
   const [rules, setRules] = useState<Rule[]>([])
@@ -39,6 +41,19 @@ export default function UnclassifiedPage() {
     }
     run()
   }, [])
+
+  // ✅ URL 파라미터(branch, year, month) 자동 인식
+  useEffect(() => {
+    const branch = params.get('branch')
+    const year = params.get('year')
+    const month = params.get('month')
+    if (branch) setSelectedBranch(branch)
+    if (year && month) {
+      // yyyy-mm 형태로 변환
+      const formatted = `${year}-${String(month).padStart(2, '0')}`
+      setSelectedMonth(formatted)
+    }
+  }, [params])
 
   // ✅ 지점 목록 불러오기
   useEffect(() => {
@@ -112,9 +127,16 @@ export default function UnclassifiedPage() {
     }
   }
 
+  // ✅ 자동 로드 (branch + month 모두 있을 때)
   useEffect(() => {
     if (accessToken && selectedBranch) load()
   }, [accessToken, selectedBranch])
+
+  useEffect(() => {
+    if (accessToken && selectedBranch && selectedMonth) {
+      load()
+    }
+  }, [accessToken, selectedBranch, selectedMonth])
 
   // ✅ 월별 / 유형 필터
   const monthList = useMemo(() => {
