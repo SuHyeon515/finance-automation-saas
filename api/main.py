@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Any, Literal
 import httpx
 import numpy as np
 import pandas as pd
-from datetime import datetime
+from datetime import datetime,timedelta
 from dateutil.relativedelta import relativedelta
 from fastapi import FastAPI, UploadFile, File, Form, Header,APIRouter, HTTPException, Depends, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,7 +46,7 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,       # ✅ 와일드카드 대신 명시
+    allow_origins=["*"],       # ✅ 와일드카드 대신 명시
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -875,9 +875,11 @@ async def list_transactions(
 
     # ✅ 연/월 필터
     if year and month:
-        start = f"{year}-{month:02d}-01"
-        end = f"{year + 1}-01-01" if month == 12 else f"{year}-{month + 1:02d}-01"
-        q = q.gte("tx_date", start).lt("tx_date", end)
+        start = pd.to_datetime(f"{year}-{month:02d}-01")
+        end = (start + pd.offsets.MonthEnd(1))
+        # ✅ 한국시간 기준으로 맞춰서 UTC-9h로 변환
+        q = q.gte("tx_date", (start - timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%SZ")) \
+            .lte("tx_date", (end - timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%SZ"))
     elif year:
         q = q.gte("tx_date", f"{year}-01-01").lt("tx_date", f"{year + 1}-01-01")
 
