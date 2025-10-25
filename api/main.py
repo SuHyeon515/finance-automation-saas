@@ -1114,11 +1114,9 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     query = supabase.table("transactions").select("*")
 
     if role in ["admin", "viewer"]:
-        # 🔹 admin/viewer: 모든 지점 가능
         if req.branch and req.branch.strip():
             query = query.eq("branch", req.branch.strip())
     else:
-        # 🔹 일반 user: 본인 데이터만
         query = query.eq("user_id", user_id)
         if req.branch and req.branch.strip():
             query = query.eq("branch", req.branch.strip())
@@ -1129,7 +1127,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     if df.empty:
         return {
             "summary": {},
-            "by_category": [],
+            "by_category": {},
             "by_fixed": [],
             "by_period": [],
             "income_details": [],
@@ -1174,33 +1172,38 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         "net": float(total_in + total_out),
     }
 
-    # === ✅ 카테고리별 (수입/지출 구분)
+    # === ✅ 카테고리별 (수입 / 고정지출 / 변동지출)
     df["category"] = df["category"].fillna("미분류")
-    by_category_in = (
-        df[df["amount"] > 0]
-        .groupby("category", dropna=False)["amount"]
-        .sum()
-        .reset_index()
-        .rename(columns={"amount": "sum"})
-        .to_dict("records")
-    )
-
-    by_category_out = (
-        df[df["amount"] < 0]
-        .groupby("category", dropna=False)["amount"]
-        .sum()
-        .reset_index()
-        .rename(columns={"amount": "sum"})
-        .to_dict("records")
-    )
+    df["is_fixed"] = df.get("is_fixed", False)
 
     by_category = {
-        "income": by_category_in,
-        "expense": by_category_out
+        "income": (
+            df[df["amount"] > 0]
+            .groupby("category", dropna=False)["amount"]
+            .sum()
+            .reset_index()
+            .rename(columns={"amount": "sum"})
+            .to_dict("records")
+        ),
+        "fixed_expense": (
+            df[(df["amount"] < 0) & (df["is_fixed"] == True)]
+            .groupby("category", dropna=False)["amount"]
+            .sum()
+            .reset_index()
+            .rename(columns={"amount": "sum"})
+            .to_dict("records")
+        ),
+        "variable_expense": (
+            df[(df["amount"] < 0) & (df["is_fixed"] == False)]
+            .groupby("category", dropna=False)["amount"]
+            .sum()
+            .reset_index()
+            .rename(columns={"amount": "sum"})
+            .to_dict("records")
+        ),
     }
 
     # === ✅ 고정/변동별 ===
-    df["is_fixed"] = df.get("is_fixed", False)
     by_fixed = (
         df.groupby("is_fixed")["amount"]
         .sum()
@@ -1217,7 +1220,6 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     else:
         df["period"] = df["tx_date"].dt.strftime("%Y-%m-%d")
 
-    # === ✅ 기간별 합계 ===
     by_period = (
         df.groupby("period")
         .agg(
@@ -1253,7 +1255,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
 
     return {
         "summary": summary,
-        "by_category": by_category,
+        "by_category": by_category,  # ✅ 변경된 구조
         "by_fixed": by_fixed,
         "by_period": by_period,
         "income_details": income_details,
