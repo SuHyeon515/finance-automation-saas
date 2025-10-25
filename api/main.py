@@ -280,7 +280,7 @@ async def upload_file(
             'user_id': user_id,
             'upload_id': upload_id,
             'branch': branch,
-            'tx_date': str(r['date']),
+            'tx_date': pd.to_datetime(r['date']).strftime('%Y-%m-%d'),
             'description': (r.get('description') or ''),
             'memo': (r.get('memo') or ''),
             'amount': float(r.get('amount', 0) or 0),
@@ -879,11 +879,10 @@ async def list_transactions(
 
     # ✅ 연/월 필터
     if year and month:
-        start = pd.to_datetime(f"{year}-{month:02d}-01")
-        end = (start + pd.offsets.MonthEnd(1))
-    # ✅ UTC 보정 제거 — Supabase는 문자열 비교로도 충분함
-        q = q.gte("tx_date", start.strftime("%Y-%m-%d")) \
-            .lte("tx_date", end.strftime("%Y-%m-%d"))
+        start = f"{year}-{month:02d}-01"
+        end = f"{year}-{month:02d}-{pd.Period(start).days_in_month:02d}"
+        # ✅ date 타입 비교는 단순 문자열 YYYY-MM-DD로 충분
+        q = q.gte("tx_date", start).lte("tx_date", end)
     elif year:
         q = q.gte("tx_date", f"{year}-01-01").lt("tx_date", f"{year + 1}-01-01")
 
@@ -1141,8 +1140,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         }
 
     # === ✅ 날짜 변환
-    df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce", utc=True)
-    df["tx_date"] = df["tx_date"].dt.tz_convert("Asia/Seoul").dt.tz_localize(None)
+    df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce").dt.tz_localize(None)
     df = df.dropna(subset=["tx_date"])
 
     # === ✅ [1] 기간 필터링 ===
