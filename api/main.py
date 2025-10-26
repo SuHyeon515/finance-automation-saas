@@ -1150,13 +1150,15 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     df = df.dropna(subset=["tx_date"])
 
     # === ✅ [1] 기간 필터링 ===
-    if req.start_month and req.end_month:
-        start_m = int(req.start_month)
-        end_m = int(req.end_month)
+    if req.start_month or req.end_month or req.month:
+        start_m = int(req.start_month or req.month or 1)
+        end_m = int(req.end_month or req.month or start_m)
 
         # ✅ 수정: KST 기반 필터
         start_date = pd.Timestamp(f"{req.year}-{start_m:02d}-01 00:00:00", tz='Asia/Seoul')
-        end_date = (pd.Timestamp(f"{req.year}-{end_m:02d}-01", tz='Asia/Seoul') + pd.offsets.MonthEnd(1)).replace(hour=23, minute=59, second=59)
+        end_date = (
+            pd.Timestamp(f"{req.year}-{end_m:02d}-01", tz='Asia/Seoul') + pd.offsets.MonthEnd(1)
+        ).replace(hour=23, minute=59, second=59)
 
         print("🧩 필터 범위:", start_date, "~", end_date)
 
