@@ -855,47 +855,59 @@ async def create_rule(payload: RuleCreate, authorization: Optional[str] = Header
     }).execute()
     return {'ok': True}
 
+
 # === 거래 목록 조회 (미분류 + 분류 완료 포함) ===
 @app.get("/transactions/manage")
 async def list_transactions(
-    limit: int = 1000,
-    offset: int = 0,
     branch: Optional[str] = None,
     year: Optional[int] = None,
     month: Optional[int] = None,
     authorization: Optional[str] = Header(None)
 ):
     user_id = await get_user_id(authorization)
+    role = await get_role(user_id)
 
-    q = (
-        supabase.table("transactions")
-        .select("id, user_id, branch, tx_date, description, amount, category, memo, is_fixed")
-        .eq("user_id", user_id)
-    )
+    # ✅ admin/viewer는 모든 유저 데이터 접근 가능 (service-role 우회)
+    if role in ["admin", "viewer"]:
+        db_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        q = db_client.table("transactions").select(
+            "id, user_id, branch, tx_date, description, amount, category, memo, is_fixed"
+        )
+    else:
+        db_client = supabase
+        q = db_client.table("transactions").select(
+            "id, user_id, branch, tx_date, description, amount, category, memo, is_fixed"
+        ).eq("user_id", user_id)
 
+    # ✅ branch 필터
     if branch and branch.strip():
-        q = q.eq("branch", branch.strip())
+        q = q.ilike("branch", f"%{branch.strip()}%")
 
-    # ✅ 월 단위 필터 (리포트와 동일하게 수정)
+    # ✅ 날짜 필터
     if year and month:
-        # Supabase는 SQL 표현식을 직접 지원하므로, 연도/월 비교용 필터 적용
-        # 단순 UTC 문자열보다 안전하게 처리
         start_month = f"{year}-{month:02d}-01"
         end_month = (pd.Timestamp(start_month) + pd.offsets.MonthEnd(1)).strftime("%Y-%m-%d")
 
-        q = (
-            q.gte("tx_date", start_month)
-             .lte("tx_date", end_month)
-        )
+        q = q.gte("tx_date", start_month).lte("tx_date", end_month)
     elif year:
-        q = (
-            q.gte("tx_date", f"{year}-01-01")
-             .lt("tx_date", f"{year + 1}-01-01")
-        )
+        q = q.gte("tx_date", f"{year}-01-01").lt("tx_date", f"{year + 1}-01-01")
 
-    q = q.order("tx_date", desc=True).range(offset, offset + limit - 1)
-    result = q.execute()
-    data = result.data or []
+    # ✅ 전체 데이터 페이징 가져오기 (1000건씩)
+    all_data = []
+    start = 0
+    step = 1000
+
+    while True:
+        res = q.range(start, start + step - 1).execute()
+        if not res.data:
+            break
+        all_data.extend(res.data)
+        if len(res.data) < step:
+            break
+        start += step
+
+    data = all_data
+    print(f"📦 전체 거래 수집 완료: {len(data)}건")
 
     # ✅ 후처리: 문자열 → datetime 변환 (UTC→KST)
     for row in data:
@@ -913,7 +925,12 @@ async def list_transactions(
         row["branch"] = row.get("branch") or ""
         row["is_fixed"] = bool(row.get("is_fixed", False))
 
-    return {"items": data, "count": len(data), "limit": limit, "offset": offset}
+    return {
+        "items": data,
+        "count": len(data),
+        "limit": len(data),  # ✅ limit 제거
+        "offset": 0
+    }
 
 # # === 거래 카테고리 / 메모 지정 ===
 # @app.post('/transactions/assign')
