@@ -1142,8 +1142,21 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         if req.branch and req.branch.strip():
             query = query.ilike("branch", f"%{req.branch.strip()}%")
 
-    # === Fetch data from DB ===
-    data = query.execute().data or []
+    # ✅ 여기에 페이징 전체 가져오기 로직 넣기
+    all_data = []
+    start = 0
+    step = 1000
+
+    while True:
+        res = query.range(start, start + step - 1).execute()
+        if not res.data:
+            break
+        all_data.extend(res.data)
+        if len(res.data) < step:
+            break
+        start += step
+
+    data = all_data  # 👈 전체 데이터를 df로 넘김
     df = pd.DataFrame(data)
 
     if df.empty:
