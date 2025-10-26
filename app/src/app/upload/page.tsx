@@ -10,18 +10,20 @@ export default function UploadPage() {
   const [branchError, setBranchError] = useState('')
   const [year, setYear] = useState(new Date().getFullYear())
   const [month, setMonth] = useState(new Date().getMonth() + 1)
+  const [startMonth, setStartMonth] = useState('')
+  const [endMonth, setEndMonth] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
 
-  // ✅ 인증된 사용자 토큰을 이용해 branches 불러오기
+  // ✅ 지점 목록 불러오기
   useEffect(() => {
     api.branches()
       .then(setBranches)
       .catch(() => setBranches([]))
   }, [])
 
-  // ✅ 중복 검사
+  // ✅ 지점 중복 검사
   useEffect(() => {
     if (!customBranch.trim()) {
       setBranchError('')
@@ -33,7 +35,7 @@ export default function UploadPage() {
     setBranchError(exists ? '이미 존재하는 지점입니다.' : '')
   }, [customBranch, branches])
 
-  // ✅ 업로드 처리
+  // ✅ 업로드 실행
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!file) return alert('엑셀 파일을 선택하세요!')
@@ -48,8 +50,12 @@ export default function UploadPage() {
     formData.append('period_year', String(year))
     formData.append('period_month', String(month))
 
+    // ✅ 기간 지정 시 추가 필드 전송
+    if (startMonth) formData.append('start_month', startMonth)
+    if (endMonth) formData.append('end_month', endMonth)
+
     setLoading(true)
-    setMessage('업로드 중...')
+    setMessage('📤 업로드 중입니다...')
 
     try {
       const token = await (await import('@/lib/api')).apiAuthHeader()
@@ -61,6 +67,7 @@ export default function UploadPage() {
 
       if (!res.ok) throw new Error(await res.text())
 
+      // ✅ 처리 완료 후 파일 다운로드
       const blob = await res.blob()
       const cd = res.headers.get('Content-Disposition') || ''
       const match = cd.match(/filename="?([^"]+)"?/)
@@ -120,35 +127,38 @@ export default function UploadPage() {
               branchError ? 'border-red-400' : ''
             }`}
           />
-
           {branchError && (
             <p className="text-red-500 text-xs mt-1">{branchError}</p>
           )}
         </div>
 
+        {/* ✅ 업로드 기간 지정 */}
         <div className="flex gap-4">
           <div className="flex-1">
-            <label className="block text-sm mb-1">연도</label>
+            <label className="block text-sm mb-1">시작 년월</label>
             <input
-              type="number"
-              value={year}
-              onChange={e => setYear(Number(e.target.value))}
+              type="month"
+              value={startMonth}
+              onChange={(e) => setStartMonth(e.target.value)}
               className="border rounded px-3 py-2 w-full"
             />
           </div>
           <div className="flex-1">
-            <label className="block text-sm mb-1">월</label>
+            <label className="block text-sm mb-1">종료 년월</label>
             <input
-              type="number"
-              min={1}
-              max={12}
-              value={month}
-              onChange={e => setMonth(Number(e.target.value))}
+              type="month"
+              value={endMonth}
+              onChange={(e) => setEndMonth(e.target.value)}
               className="border rounded px-3 py-2 w-full"
             />
           </div>
         </div>
 
+        <p className="text-xs text-gray-500">
+          💡 기간을 지정하지 않으면 한 달 단위 업로드로 처리됩니다.
+        </p>
+
+        {/* ✅ 엑셀 파일 */}
         <div>
           <label className="block text-sm mb-1">엑셀 파일 선택</label>
           <input
