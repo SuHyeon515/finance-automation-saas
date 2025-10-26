@@ -1123,19 +1123,26 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     user_id = await get_user_id(authorization)
     role = await get_role(user_id)
 
-    # === ✅ [0] 역할별 데이터 접근 (branch 부분 일치 + 공백 제거)
-    query = supabase.table("transactions").select("*")
+    # === Use admin/service-role client for admin/viewer to bypass RLS ===
+    # Note: service role key must never be exposed to clients.
+    if role in ["admin", "viewer"]:
+        db_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    else:
+        db_client = supabase
 
+    # === [0] Build base query (will run on db_client which may be admin or regular) ===
+    query = db_client.table("transactions").select("*")
+
+    # === Access rules: admin/viewer see all (no user_id filter); normal users restricted ===
     if role in ["admin", "viewer"]:
         if req.branch and req.branch.strip():
-            # ✅ 부분일치 (공백 포함 데이터도 잡힘)
             query = query.ilike("branch", f"%{req.branch.strip()}%")
     else:
         query = query.eq("user_id", user_id)
         if req.branch and req.branch.strip():
             query = query.ilike("branch", f"%{req.branch.strip()}%")
 
-    # === ✅ 데이터 로드
+    # === Fetch data from DB ===
     data = query.execute().data or []
     df = pd.DataFrame(data)
 
@@ -1150,14 +1157,12 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
             "expense_details": []
         }
 
-    # === ✅ [1] 날짜 변환 (UTC 변환 제거 — 미분류와 동일)
+    # === Date conversion and cleaning ===
     df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce")
     df = df.dropna(subset=["tx_date"])
-
-    # ✅ branch 공백 보정
     df["branch"] = df["branch"].astype(str).str.strip()
 
-    # === ✅ [2] 기간 필터링 (KST 기준, 월 기준 비교)
+    # === Period (month-range) filtering (KST month logic) ===
     if req.start_month or req.end_month or req.month:
         start_m = int(req.start_month or req.month or 1)
         end_m = int(req.end_month or req.month or start_m)
@@ -1175,13 +1180,13 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     elif req.year:
         df = df[df["tx_date"].dt.year == req.year]
 
-    # === ✅ [3] 일 단위 필터링 (선택적)
+    # === Optional day-range filtering ===
     if req.granularity == "day" and req.start_date and req.end_date:
         start = pd.to_datetime(req.start_date)
         end = pd.to_datetime(req.end_date)
         df = df[(df["tx_date"] >= start) & (df["tx_date"] <= end)]
 
-    # === ✅ [4] 데이터 정리 (금액/카테고리 보정)
+    # === Normalize amounts & categories, remove zeros ===
     df["amount"] = (
         df["amount"]
         .astype(str)
@@ -1195,10 +1200,10 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
 
     print("💰 금액 합계 검증:", df["amount"].sum(), "건수:", len(df))
 
-    # === ✅ [5] 정렬
+    # === Sorting ===
     df = df.sort_values("tx_date", ascending=False)
 
-    # === ✅ 기본 통계
+    # === Summary stats ===
     total_in = df[df["amount"] > 0]["amount"].sum()
     total_out = df[df["amount"] < 0]["amount"].sum()
     summary = {
@@ -1207,7 +1212,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         "net": float(total_in + total_out),
     }
 
-    # === ✅ [6] 카테고리별 집계
+    # === By category aggregates ===
     by_category = {
         "income": (
             df[df["amount"] > 0]
@@ -1235,7 +1240,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         ),
     }
 
-    # === ✅ [7] 고정/변동별 합계
+    # === Fixed vs variable totals ===
     by_fixed = (
         df.groupby("is_fixed")["amount"]
         .sum()
@@ -1244,7 +1249,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         .to_dict("records")
     )
 
-    # === ✅ [8] 기간 단위(period) 계산
+    # === Period grouping (week/month/day) ===
     if req.granularity == "week":
         df["period"] = (
             df["tx_date"] - pd.to_timedelta(df["tx_date"].dt.weekday, unit="D")
@@ -1268,7 +1273,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         .to_dict("records")
     )
 
-    # === ✅ [9] 상세 내역
+    # === Details ===
     income_details = (
         df[df["amount"] > 0]
         .sort_values("tx_date", ascending=False)
@@ -1284,14 +1289,14 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         .to_dict("records")
     )
 
-    # === ✅ 로그 출력 (디버깅)
+    # === Debug logs ===
     print(f"✅ [REPORTS] user_id={user_id}, role={role}, branch={req.branch}, rows={len(df)}")
     print("📅 [최근 거래 5건]")
     print(df[["tx_date", "description", "amount", "category"]].head(5))
     print("📅 [가장 오래된 거래 5건]")
     print(df[["tx_date", "description", "amount", "category"]].tail(5))
 
-    # === ✅ 결과 반환
+    # === Return ===
     return {
         "summary": summary,
         "by_category": by_category,
@@ -1300,6 +1305,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         "income_details": income_details,
         "expense_details": expense_details,
     }
+
 
 @app.get("/analyses/meta")
 async def get_analyses_meta(
