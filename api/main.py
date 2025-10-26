@@ -879,10 +879,8 @@ async def list_transactions(
 
     # ✅ 연/월 필터
     if year and month:
-        # ✅ start / end를 실제 날짜 객체로 계산
         start_date = datetime(year, month, 1)
-        end_date = (start_date + pd.offsets.MonthEnd(1)).date()
-
+        end_date = (start_date + pd.offsets.MonthEnd(1))
         q = q.gte("tx_date", start_date.strftime("%Y-%m-%d")).lte("tx_date", end_date.strftime("%Y-%m-%d"))
     elif year:
         q = q.gte("tx_date", f"{year}-01-01").lt("tx_date", f"{year + 1}-01-01")
@@ -1156,7 +1154,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         start_date = datetime(req.year, start_m, 1)
         end_date = datetime(req.year, end_m, 28) + pd.offsets.MonthEnd(1)  # 월 말일 자동 계산
 
-        df = df[(df["tx_date"] >= start_date.date()) & (df["tx_date"] <= end_date.date())]
+        df = df[(df["tx_date"] >= start_date) & (df["tx_date"] <= end_date)]
     elif req.year:
         df = df[df["tx_date"].dt.year == req.year]
 
