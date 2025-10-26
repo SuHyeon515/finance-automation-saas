@@ -280,7 +280,7 @@ async def upload_file(
             'user_id': user_id,
             'upload_id': upload_id,
             'branch': branch,
-            'tx_date': pd.to_datetime(r['date']).tz_localize('Asia/Seoul').isoformat(),
+            'tx_date': pd.to_datetime(r['date'], errors="coerce").tz_localize("Asia/Seoul").tz_convert("UTC").isoformat(),
             'description': (r.get('description') or ''),
             'memo': (r.get('memo') or ''),
             'amount': float(r.get('amount', 0) or 0),
@@ -875,18 +875,21 @@ async def list_transactions(
     if branch and branch.strip():
         q = q.eq("branch", branch.strip())
 
-    # ✅ 연/월 필터 (수정됨)
+    # ✅ 월 단위 필터 (리포트와 동일하게 수정)
     if year and month:
-        start_date = datetime(year, month, 1)
-        end_date = (start_date + pd.offsets.MonthEnd(1))
+        # Supabase는 SQL 표현식을 직접 지원하므로, 연도/월 비교용 필터 적용
+        # 단순 UTC 문자열보다 안전하게 처리
+        start_month = f"{year}-{month:02d}-01"
+        end_month = (pd.Timestamp(start_month) + pd.offsets.MonthEnd(1)).strftime("%Y-%m-%d")
+
         q = (
-            q.gte("tx_date", start_date.strftime("%Y-%m-%dT00:00:00Z"))
-             .lte("tx_date", end_date.strftime("%Y-%m-%dT23:59:59Z"))
+            q.gte("tx_date", start_month)
+             .lte("tx_date", end_month)
         )
     elif year:
         q = (
-            q.gte("tx_date", f"{year}-01-01T00:00:00Z")
-             .lt("tx_date", f"{year + 1}-01-01T00:00:00Z")
+            q.gte("tx_date", f"{year}-01-01")
+             .lt("tx_date", f"{year + 1}-01-01")
         )
 
     q = q.order("tx_date", desc=True).range(offset, offset + limit - 1)
@@ -910,7 +913,6 @@ async def list_transactions(
         row["is_fixed"] = bool(row.get("is_fixed", False))
 
     return {"items": data, "count": len(data), "limit": limit, "offset": offset}
-
 
 # # === 거래 카테고리 / 메모 지정 ===
 # @app.post('/transactions/assign')
@@ -1144,9 +1146,9 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
             "expense_details": []
         }
 
-    # === ✅ 날짜 변환
-    df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce")
-    df["tx_date"] = df["tx_date"].dt.tz_localize("Asia/Seoul", ambiguous='NaT', nonexistent='NaT')
+    # 날짜 변환
+    df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce", utc=True)
+    df["tx_date"] = df["tx_date"].dt.tz_convert("Asia/Seoul")
     df = df.dropna(subset=["tx_date"])
 
     # === ✅ [1] 기간 필터링 ===
@@ -1154,17 +1156,12 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         start_m = int(req.start_month or req.month or 1)
         end_m = int(req.end_month or req.month or start_m)
 
-        # ✅ 수정: KST 기반 필터
-        start_date = pd.Timestamp(f"{req.year}-{start_m:02d}-01 00:00:00", tz='Asia/Seoul')
-        end_date = (
-            pd.Timestamp(f"{req.year}-{end_m:02d}-01", tz='Asia/Seoul') + pd.offsets.MonthEnd(1)
-        ).replace(hour=23, minute=59, second=59)
-
-        print("🧩 필터 범위:", start_date, "~", end_date)
-
+        # ✅ 단순 월 기준 필터
+        df["year"] = df["tx_date"].dt.year
+        df["month"] = df["tx_date"].dt.month
         df = df[
-            (df["tx_date"] >= start_date) &
-            (df["tx_date"] <= end_date)
+            (df["year"] == req.year) &
+            (df["month"].between(start_m, end_m))
         ]
     elif req.year:
         df = df[df["tx_date"].dt.year == req.year]
