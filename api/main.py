@@ -1163,8 +1163,8 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         print("🧩 필터 범위:", start_date, "~", end_date)
 
         df = df[
-            (df["tx_date"] >= start_date.tz_localize(None)) &
-            (df["tx_date"] <= end_date.tz_localize(None))
+            (df["tx_date"] >= start_date) &
+            (df["tx_date"] <= end_date)
         ]
     elif req.year:
         df = df[df["tx_date"].dt.year == req.year]
