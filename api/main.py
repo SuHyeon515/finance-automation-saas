@@ -1144,15 +1144,14 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
 
     # === ✅ [1] 기간 필터링 ===
     if req.start_month and req.end_month:
-        try:
-            start_m = int(req.start_month)
-            end_m = int(req.end_month)
-        except:
-            start_m = req.start_month
-            end_m = req.end_month
+        start_m = int(req.start_month)
+        end_m = int(req.end_month)
 
-        start_date = datetime(req.year, start_m, 1)
-        end_date = datetime(req.year, end_m, 28) + pd.offsets.MonthEnd(1)  # 월 말일 자동 계산
+        # ✅ 명시적으로 시작일과 종료일 계산
+        start_date = pd.Timestamp(f"{req.year}-{start_m:02d}-01")
+        end_date = pd.Timestamp(f"{req.year}-{end_m:02d}-01") + pd.offsets.MonthEnd(1)
+
+        print("🧩 필터 범위:", start_date, "~", end_date)  # 디버깅용 로그
 
         df = df[(df["tx_date"] >= start_date) & (df["tx_date"] <= end_date)]
     elif req.year:
