@@ -1145,8 +1145,8 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         }
 
     # === ✅ 날짜 변환
-    df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce", utc=True)  # UTC 포함 변환
-    df["tx_date"] = df["tx_date"].dt.tz_convert("Asia/Seoul").dt.tz_localize(None)
+    df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce")
+    df["tx_date"] = df["tx_date"].dt.tz_localize("Asia/Seoul", ambiguous='NaT', nonexistent='NaT')
     df = df.dropna(subset=["tx_date"])
 
     # === ✅ [1] 기간 필터링 ===
