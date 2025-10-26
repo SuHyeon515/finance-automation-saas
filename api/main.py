@@ -1147,23 +1147,30 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
             "expense_details": []
         }
 
-    # 날짜 변환
+    # === ✅ 날짜 변환 (UTC → KST)
     df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce", utc=True)
     df["tx_date"] = df["tx_date"].dt.tz_convert("Asia/Seoul")
     df = df.dropna(subset=["tx_date"])
 
-    # === ✅ [1] 기간 필터링 ===
+    # === ✅ [1] 기간 필터링 (날짜 범위 직접 비교)
     if req.start_month or req.end_month or req.month:
         start_m = int(req.start_month or req.month or 1)
         end_m = int(req.end_month or req.month or start_m)
 
-        # ✅ 단순 월 기준 필터
-        df["year"] = df["tx_date"].dt.year
-        df["month"] = df["tx_date"].dt.month
+        start_date = pd.Timestamp(f"{req.year}-{start_m:02d}-01 00:00:00", tz="Asia/Seoul")
+        end_date = (
+            pd.Timestamp(f"{req.year}-{end_m:02d}-01", tz="Asia/Seoul")
+            + pd.offsets.MonthEnd(1)
+        ).replace(hour=23, minute=59, second=59)
+
+        print("🧩 필터 범위:", start_date, "~", end_date)
+
+        # ✅ 날짜 범위 비교로 필터링 (5/1~5/31 전부 포함)
         df = df[
-            (df["year"] == req.year) &
-            (df["month"].between(start_m, end_m))
+            (df["tx_date"] >= start_date) &
+            (df["tx_date"] <= end_date)
         ]
+
     elif req.year:
         df = df[df["tx_date"].dt.year == req.year]
 
@@ -1184,10 +1191,11 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         "net": float(total_in + total_out),
     }
 
-    # === ✅ 카테고리별 (수입 / 고정지출 / 변동지출)
+    # === ✅ 카테고리 처리
     df["category"] = df["category"].fillna("미분류")
     df["is_fixed"] = df.get("is_fixed", False)
 
+    # === ✅ 카테고리별 집계 ===
     by_category = {
         "income": (
             df[df["amount"] > 0]
@@ -1215,7 +1223,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         ),
     }
 
-    # === ✅ 고정/변동별 ===
+    # === ✅ 고정/변동별 합계 ===
     by_fixed = (
         df.groupby("is_fixed")["amount"]
         .sum()
@@ -1263,18 +1271,17 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         .to_dict("records")
     )
 
+    # === ✅ 로그 출력 (디버깅용)
     print(f"✅ [reports] user_id={user_id}, role={role}, branch={req.branch}, rows={len(df)}")
     print("📅 [최근 거래 10건]")
     print(df[["tx_date", "description", "amount", "category"]].head(10))
-
     print("📅 [가장 오래된 거래 10건]")
     print(df[["tx_date", "description", "amount", "category"]].tail(10))
 
-    print(df[df["tx_date"].between("2025-05-01", "2025-05-05")][["tx_date", "description", "amount", "category"]])
-
+    # === ✅ 결과 반환 ===
     return {
         "summary": summary,
-        "by_category": by_category,  # ✅ 변경된 구조
+        "by_category": by_category,
         "by_fixed": by_fixed,
         "by_period": by_period,
         "income_details": income_details,
