@@ -50,7 +50,8 @@ app.add_middleware(
     allow_origins=[
         "https://finance-automation-saas-um91.vercel.app",  # ✅ 실제 Vercel 프론트
         "https://finance-automation-saas.vercel.app",       # ✅ 다른 도메인 버전
-        "http://localhost:3000"                             # ✅ 로컬 개발용
+        "http://localhost:3000",                            # ✅ 로컬 개발용
+        "https://finance-automation-saas.onrender.com"      # ✅ 자기 자신 추가 (중요!)
     ],
     allow_credentials=True,
     allow_methods=["*"],
