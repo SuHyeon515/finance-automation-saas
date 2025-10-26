@@ -864,7 +864,6 @@ async def list_transactions(
     month: Optional[int] = None,
     authorization: Optional[str] = Header(None)
 ):
-    """전체 거래 관리 (미분류 + 분류 완료 포함)"""
     user_id = await get_user_id(authorization)
 
     q = (
@@ -873,38 +872,45 @@ async def list_transactions(
         .eq("user_id", user_id)
     )
 
-    # ✅ 브랜치 필터 (정확 일치 + 공백 제거)
     if branch and branch.strip():
         q = q.eq("branch", branch.strip())
 
-    # ✅ 연/월 필터
+    # ✅ 연/월 필터 (수정됨)
     if year and month:
         start_date = datetime(year, month, 1)
         end_date = (start_date + pd.offsets.MonthEnd(1))
-        q = q.gte("tx_date", start_date.strftime("%Y-%m-%d")).lte("tx_date", end_date.strftime("%Y-%m-%d"))
+        q = (
+            q.gte("tx_date", start_date.strftime("%Y-%m-%dT00:00:00Z"))
+             .lte("tx_date", end_date.strftime("%Y-%m-%dT23:59:59Z"))
+        )
     elif year:
-        q = q.gte("tx_date", f"{year}-01-01").lt("tx_date", f"{year + 1}-01-01")
+        q = (
+            q.gte("tx_date", f"{year}-01-01T00:00:00Z")
+             .lt("tx_date", f"{year + 1}-01-01T00:00:00Z")
+        )
 
     q = q.order("tx_date", desc=True).range(offset, offset + limit - 1)
     result = q.execute()
-
     data = result.data or []
 
-    # ✅ 데이터 후처리 (null-safe 변환)
+    # ✅ 후처리: 문자열 → datetime 변환 (UTC→KST)
     for row in data:
+        if row.get("tx_date"):
+            try:
+                row["tx_date"] = (
+                    pd.to_datetime(row["tx_date"], utc=True)
+                    .tz_convert("Asia/Seoul")
+                    .strftime("%Y-%m-%d %H:%M:%S")
+                )
+            except Exception:
+                pass
         row["memo"] = row.get("memo") or ""
         row["category"] = row.get("category") or "미분류"
         row["branch"] = row.get("branch") or ""
+        row["is_fixed"] = bool(row.get("is_fixed", False))
 
-        val = row.get("is_fixed")
-        row["is_fixed"] = bool(val) if val is not None else False
+    return {"items": data, "count": len(data), "limit": limit, "offset": offset}
 
-    return {
-        "items": data,
-        "count": len(data),
-        "limit": limit,
-        "offset": offset,
-    }
 
 # # === 거래 카테고리 / 메모 지정 ===
 # @app.post('/transactions/assign')
