@@ -1114,8 +1114,8 @@ class ReportRequest(BaseModel):
     granularity: Literal['day', 'week', 'month'] = 'month'
     start_date: Optional[str] = None
     end_date: Optional[str] = None
-    start_month: Optional[int] = None   # ✅ 추가
-    end_month: Optional[int] = None     # ✅ 추가
+    start_month: Optional[int] = None
+    end_month: Optional[int] = None
 
 
 @app.post("/reports")
@@ -1137,6 +1137,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     data = query.execute().data or []
     df = pd.DataFrame(data)
 
+    # === ✅ 데이터 없음 처리
     if df.empty:
         return {
             "summary": {},
@@ -1152,14 +1153,12 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     df["tx_date"] = df["tx_date"].dt.tz_convert("Asia/Seoul")
     df = df.dropna(subset=["tx_date"])
 
-    # === ✅ [2] 정확한 기간 필터링 (날짜 단위 비교)
-    #   → 월 단위 리포트는 2025-08-01 ~ 2025-08-31 전부 포함
-    # === ✅ [2] 정확한 기간 필터링 (KST 기준 월 비교로 변경)
+    # === ✅ [2] 정확한 기간 필터링 (KST 기준 월 비교)
     if req.start_month or req.end_month or req.month:
         start_m = int(req.start_month or req.month or 1)
         end_m = int(req.end_month or req.month or start_m)
 
-        # ✅ 단순히 '월' 비교 (KST 기준)
+        # ✅ 월 비교 (KST 기준)
         df["year"] = df["tx_date"].dt.year
         df["month"] = df["tx_date"].dt.month
         before_rows = len(df)
@@ -1181,6 +1180,13 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         end = pd.to_datetime(req.end_date).tz_localize("Asia/Seoul")
         df = df[(df["tx_date"] >= start) & (df["tx_date"] <= end)]
 
+    # === ✅ [3] 데이터 정리 (금액/카테고리 보정)
+    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
+    df["category"] = df["category"].fillna("미분류").replace("", "미분류")
+    df = df[df["amount"] != 0]
+
+    print("💰 금액 합계 검증:", df["amount"].sum(), "건수:", len(df))
+
     # === ✅ 정렬
     df = df.sort_values("tx_date", ascending=False)
 
@@ -1194,7 +1200,6 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     }
 
     # === ✅ 카테고리 처리
-    df["category"] = df["category"].fillna("미분류")
     df["is_fixed"] = df.get("is_fixed", False)
 
     # === ✅ 카테고리별 집계
@@ -1234,7 +1239,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         .to_dict("records")
     )
 
-    # === ✅ [3] 기간 단위(period) 계산
+    # === ✅ [4] 기간 단위(period) 계산
     if req.granularity == "week":
         df["period"] = (df["tx_date"] - pd.to_timedelta(df["tx_date"].dt.weekday, unit="D")).dt.strftime("%Y-%m-%d")
     elif req.granularity == "month":
