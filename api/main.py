@@ -1154,13 +1154,16 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         start_m = int(req.start_month)
         end_m = int(req.end_month)
 
-        # ✅ 명시적으로 시작일과 종료일 계산
-        start_date = pd.Timestamp(f"{req.year}-{start_m:02d}-01")
-        end_date = pd.Timestamp(f"{req.year}-{end_m:02d}-01") + pd.offsets.MonthEnd(1)
+        # ✅ 수정: KST 기반 필터
+        start_date = pd.Timestamp(f"{req.year}-{start_m:02d}-01 00:00:00", tz='Asia/Seoul')
+        end_date = (pd.Timestamp(f"{req.year}-{end_m:02d}-01", tz='Asia/Seoul') + pd.offsets.MonthEnd(1)).replace(hour=23, minute=59, second=59)
 
-        print("🧩 필터 범위:", start_date, "~", end_date)  # 디버깅용 로그
+        print("🧩 필터 범위:", start_date, "~", end_date)
 
-        df = df[(df["tx_date"] >= start_date) & (df["tx_date"] <= end_date)]
+        df = df[
+            (df["tx_date"] >= start_date.tz_localize(None)) &
+            (df["tx_date"] <= end_date.tz_localize(None))
+        ]
     elif req.year:
         df = df[df["tx_date"].dt.year == req.year]
 
