@@ -1148,17 +1148,16 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
             "expense_details": []
         }
 
-    # === ✅ [1] 날짜 변환 (UTC → KST)
-    df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce", utc=True)
-    df["tx_date"] = df["tx_date"].dt.tz_convert("Asia/Seoul")
+    # === ✅ [1] 날짜 변환 (미분류와 동일 — UTC 변환 제거)
+    df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce")
     df = df.dropna(subset=["tx_date"])
 
-    # === ✅ [2] 정확한 기간 필터링 (KST 기준 월 비교)
+    # === ✅ [2] 기간 필터링 (KST 기준 월 비교)
     if req.start_month or req.end_month or req.month:
         start_m = int(req.start_month or req.month or 1)
         end_m = int(req.end_month or req.month or start_m)
 
-        # ✅ 월 비교 (KST 기준)
+        # ✅ 단순 월 기준 필터
         df["year"] = df["tx_date"].dt.year
         df["month"] = df["tx_date"].dt.month
         before_rows = len(df)
@@ -1175,13 +1174,20 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     elif req.year:
         df = df[df["tx_date"].dt.year == req.year]
 
+    # === ✅ [3] 일 단위 필터링
     if req.granularity == "day" and req.start_date and req.end_date:
-        start = pd.to_datetime(req.start_date).tz_localize("Asia/Seoul")
-        end = pd.to_datetime(req.end_date).tz_localize("Asia/Seoul")
+        start = pd.to_datetime(req.start_date)
+        end = pd.to_datetime(req.end_date)
         df = df[(df["tx_date"] >= start) & (df["tx_date"] <= end)]
 
-    # === ✅ [3] 데이터 정리 (금액/카테고리 보정)
-    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
+    # === ✅ [4] 데이터 정리 (금액/카테고리 보정)
+    df["amount"] = (
+        df["amount"]
+        .astype(str)
+        .str.replace(r"[^0-9\-\.\+]", "", regex=True)
+        .replace("", "0")
+        .astype(float)
+    )
     df["category"] = df["category"].fillna("미분류").replace("", "미분류")
     df = df[df["amount"] != 0]
 
@@ -1239,7 +1245,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         .to_dict("records")
     )
 
-    # === ✅ [4] 기간 단위(period) 계산
+    # === ✅ [5] 기간 단위(period) 계산
     if req.granularity == "week":
         df["period"] = (df["tx_date"] - pd.to_timedelta(df["tx_date"].dt.weekday, unit="D")).dt.strftime("%Y-%m-%d")
     elif req.granularity == "month":
