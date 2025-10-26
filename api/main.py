@@ -1123,22 +1123,24 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     user_id = await get_user_id(authorization)
     role = await get_role(user_id)
 
-    # === ✅ [0] 역할별 데이터 접근 ===
+    # === ✅ [0] 역할별 데이터 접근 (branch 부분 일치 + 공백 제거)
     query = supabase.table("transactions").select("*")
 
     if role in ["admin", "viewer"]:
         if req.branch and req.branch.strip():
-            query = query.eq("branch", req.branch.strip())
+            # ✅ 부분일치 (공백 포함 데이터도 잡힘)
+            query = query.ilike("branch", f"%{req.branch.strip()}%")
     else:
         query = query.eq("user_id", user_id)
         if req.branch and req.branch.strip():
-            query = query.eq("branch", req.branch.strip())
+            query = query.ilike("branch", f"%{req.branch.strip()}%")
 
+    # === ✅ 데이터 로드
     data = query.execute().data or []
     df = pd.DataFrame(data)
 
-    # === ✅ 데이터 없음 처리
     if df.empty:
+        print("⚠️ 리포트: 데이터 없음")
         return {
             "summary": {},
             "by_category": {},
@@ -1148,33 +1150,32 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
             "expense_details": []
         }
 
-    # === ✅ [1] 날짜 변환 (미분류와 동일 — UTC 변환 제거)
+    # === ✅ [1] 날짜 변환 (UTC 변환 제거 — 미분류와 동일)
     df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce")
     df = df.dropna(subset=["tx_date"])
 
-    # === ✅ [2] 기간 필터링 (KST 기준 월 비교)
+    # ✅ branch 공백 보정
+    df["branch"] = df["branch"].astype(str).str.strip()
+
+    # === ✅ [2] 기간 필터링 (KST 기준, 월 기준 비교)
     if req.start_month or req.end_month or req.month:
         start_m = int(req.start_month or req.month or 1)
         end_m = int(req.end_month or req.month or start_m)
 
-        # ✅ 단순 월 기준 필터
         df["year"] = df["tx_date"].dt.year
         df["month"] = df["tx_date"].dt.month
+
         before_rows = len(df)
-
-        df = df[
-            (df["year"] == req.year) &
-            (df["month"].between(start_m, end_m))
-        ]
-
+        df = df[(df["year"] == req.year) & (df["month"].between(start_m, end_m))]
         after_rows = len(df)
+
         print(f"🧩 월 기준 필터링: {req.year}-{start_m} ~ {req.year}-{end_m}")
         print(f"📊 필터 전 행 수: {before_rows}, 필터 후 행 수: {after_rows}")
 
     elif req.year:
         df = df[df["tx_date"].dt.year == req.year]
 
-    # === ✅ [3] 일 단위 필터링
+    # === ✅ [3] 일 단위 필터링 (선택적)
     if req.granularity == "day" and req.start_date and req.end_date:
         start = pd.to_datetime(req.start_date)
         end = pd.to_datetime(req.end_date)
@@ -1190,10 +1191,11 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     )
     df["category"] = df["category"].fillna("미분류").replace("", "미분류")
     df = df[df["amount"] != 0]
+    df["is_fixed"] = df.get("is_fixed", False)
 
     print("💰 금액 합계 검증:", df["amount"].sum(), "건수:", len(df))
 
-    # === ✅ 정렬
+    # === ✅ [5] 정렬
     df = df.sort_values("tx_date", ascending=False)
 
     # === ✅ 기본 통계
@@ -1205,10 +1207,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         "net": float(total_in + total_out),
     }
 
-    # === ✅ 카테고리 처리
-    df["is_fixed"] = df.get("is_fixed", False)
-
-    # === ✅ 카테고리별 집계
+    # === ✅ [6] 카테고리별 집계
     by_category = {
         "income": (
             df[df["amount"] > 0]
@@ -1236,7 +1235,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         ),
     }
 
-    # === ✅ 고정/변동별 합계
+    # === ✅ [7] 고정/변동별 합계
     by_fixed = (
         df.groupby("is_fixed")["amount"]
         .sum()
@@ -1245,9 +1244,11 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         .to_dict("records")
     )
 
-    # === ✅ [5] 기간 단위(period) 계산
+    # === ✅ [8] 기간 단위(period) 계산
     if req.granularity == "week":
-        df["period"] = (df["tx_date"] - pd.to_timedelta(df["tx_date"].dt.weekday, unit="D")).dt.strftime("%Y-%m-%d")
+        df["period"] = (
+            df["tx_date"] - pd.to_timedelta(df["tx_date"].dt.weekday, unit="D")
+        ).dt.strftime("%Y-%m-%d")
     elif req.granularity == "month":
         df["period"] = df["tx_date"].dt.strftime("%Y-%m")
     else:
@@ -1267,7 +1268,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         .to_dict("records")
     )
 
-    # === ✅ 상세 내역
+    # === ✅ [9] 상세 내역
     income_details = (
         df[df["amount"] > 0]
         .sort_values("tx_date", ascending=False)
@@ -1275,7 +1276,6 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         .fillna({"memo": ""})
         .to_dict("records")
     )
-
     expense_details = (
         df[df["amount"] < 0]
         .sort_values("tx_date", ascending=False)
@@ -1300,7 +1300,6 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         "income_details": income_details,
         "expense_details": expense_details,
     }
-
 
 @app.get("/analyses/meta")
 async def get_analyses_meta(
