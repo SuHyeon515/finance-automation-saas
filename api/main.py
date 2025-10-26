@@ -280,7 +280,7 @@ async def upload_file(
             'user_id': user_id,
             'upload_id': upload_id,
             'branch': branch,
-            'tx_date': pd.to_datetime(r['date']).strftime('%Y-%m-%d'),
+            'tx_date': pd.to_datetime(r['date']).tz_localize('Asia/Seoul').isoformat(),
             'description': (r.get('description') or ''),
             'memo': (r.get('memo') or ''),
             'amount': float(r.get('amount', 0) or 0),
