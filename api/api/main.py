@@ -50,7 +50,8 @@ app.add_middleware(
     allow_origins=[
         "https://finance-automation-saas-um91.vercel.app",  # ✅ 실제 Vercel 프론트
         "https://finance-automation-saas.vercel.app",       # ✅ 다른 도메인 버전
-        "http://localhost:3000"                             # ✅ 로컬 개발용
+        "http://localhost:3000",                            # ✅ 로컬 개발용
+        "https://finance-automation-saas.onrender.com"      # ✅ 자기 자신 추가 (중요!)
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -280,7 +281,7 @@ async def upload_file(
             'user_id': user_id,
             'upload_id': upload_id,
             'branch': branch,
-            'tx_date': str(r['date']),
+            'tx_date': pd.to_datetime(r['date'], errors="coerce").tz_localize("Asia/Seoul").tz_convert("UTC").isoformat(),
             'description': (r.get('description') or ''),
             'memo': (r.get('memo') or ''),
             'amount': float(r.get('amount', 0) or 0),
@@ -854,58 +855,81 @@ async def create_rule(payload: RuleCreate, authorization: Optional[str] = Header
     }).execute()
     return {'ok': True}
 
+
 # === 거래 목록 조회 (미분류 + 분류 완료 포함) ===
 @app.get("/transactions/manage")
 async def list_transactions(
-    limit: int = 1000,
-    offset: int = 0,
     branch: Optional[str] = None,
     year: Optional[int] = None,
     month: Optional[int] = None,
     authorization: Optional[str] = Header(None)
 ):
-    """전체 거래 관리 (미분류 + 분류 완료 포함)"""
     user_id = await get_user_id(authorization)
+    role = await get_role(user_id)
 
-    q = (
-        supabase.table("transactions")
-        .select("id, user_id, branch, tx_date, description, amount, category, memo, is_fixed")
-        .eq("user_id", user_id)
-    )
+    # ✅ admin/viewer는 모든 유저 데이터 접근 가능 (service-role 우회)
+    if role in ["admin", "viewer"]:
+        db_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        q = db_client.table("transactions").select(
+            "id, user_id, branch, tx_date, description, amount, category, memo, is_fixed"
+        )
+    else:
+        db_client = supabase
+        q = db_client.table("transactions").select(
+            "id, user_id, branch, tx_date, description, amount, category, memo, is_fixed"
+        ).eq("user_id", user_id)
 
-    # ✅ 브랜치 필터 (정확 일치 + 공백 제거)
+    # ✅ branch 필터
     if branch and branch.strip():
-        q = q.eq("branch", branch.strip())
+        q = q.ilike("branch", f"%{branch.strip()}%")
 
-    # ✅ 연/월 필터
+    # ✅ 날짜 필터
     if year and month:
-        start = pd.to_datetime(f"{year}-{month:02d}-01")
-        end = (start + pd.offsets.MonthEnd(1))
-        # ✅ 한국시간 기준으로 맞춰서 UTC-9h로 변환
-        q = q.gte("tx_date", (start - timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%SZ")) \
-            .lte("tx_date", (end - timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        start_month = f"{year}-{month:02d}-01"
+        end_month = (pd.Timestamp(start_month) + pd.offsets.MonthEnd(1)).strftime("%Y-%m-%d")
+
+        q = q.gte("tx_date", start_month).lte("tx_date", end_month)
     elif year:
         q = q.gte("tx_date", f"{year}-01-01").lt("tx_date", f"{year + 1}-01-01")
 
-    q = q.order("tx_date", desc=True).range(offset, offset + limit - 1)
-    result = q.execute()
+    # ✅ 전체 데이터 페이징 가져오기 (1000건씩)
+    all_data = []
+    start = 0
+    step = 1000
 
-    data = result.data or []
+    while True:
+        res = q.range(start, start + step - 1).execute()
+        if not res.data:
+            break
+        all_data.extend(res.data)
+        if len(res.data) < step:
+            break
+        start += step
 
-    # ✅ 데이터 후처리 (null-safe 변환)
+    data = all_data
+    print(f"📦 전체 거래 수집 완료: {len(data)}건")
+
+    # ✅ 후처리: 문자열 → datetime 변환 (UTC→KST)
     for row in data:
+        if row.get("tx_date"):
+            try:
+                row["tx_date"] = (
+                    pd.to_datetime(row["tx_date"], utc=True)
+                    .tz_convert("Asia/Seoul")
+                    .strftime("%Y-%m-%d %H:%M:%S")
+                )
+            except Exception:
+                pass
         row["memo"] = row.get("memo") or ""
         row["category"] = row.get("category") or "미분류"
         row["branch"] = row.get("branch") or ""
-
-        val = row.get("is_fixed")
-        row["is_fixed"] = bool(val) if val is not None else False
+        row["is_fixed"] = bool(row.get("is_fixed", False))
 
     return {
         "items": data,
         "count": len(data),
-        "limit": limit,
-        "offset": offset,
+        "limit": len(data),  # ✅ limit 제거
+        "offset": 0
     }
 
 # # === 거래 카테고리 / 메모 지정 ===
@@ -1107,8 +1131,8 @@ class ReportRequest(BaseModel):
     granularity: Literal['day', 'week', 'month'] = 'month'
     start_date: Optional[str] = None
     end_date: Optional[str] = None
-    start_month: Optional[int] = None   # ✅ 추가
-    end_month: Optional[int] = None     # ✅ 추가
+    start_month: Optional[int] = None
+    end_month: Optional[int] = None
 
 
 @app.post("/reports")
@@ -1116,21 +1140,44 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     user_id = await get_user_id(authorization)
     role = await get_role(user_id)
 
-    # === ✅ [0] 역할별 데이터 접근 ===
-    query = supabase.table("transactions").select("*")
+    # === Use admin/service-role client for admin/viewer to bypass RLS ===
+    # Note: service role key must never be exposed to clients.
+    if role in ["admin", "viewer"]:
+        db_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    else:
+        db_client = supabase
 
+    # === [0] Build base query (will run on db_client which may be admin or regular) ===
+    query = db_client.table("transactions").select("*")
+
+    # === Access rules: admin/viewer see all (no user_id filter); normal users restricted ===
     if role in ["admin", "viewer"]:
         if req.branch and req.branch.strip():
-            query = query.eq("branch", req.branch.strip())
+            query = query.ilike("branch", f"%{req.branch.strip()}%")
     else:
         query = query.eq("user_id", user_id)
         if req.branch and req.branch.strip():
-            query = query.eq("branch", req.branch.strip())
+            query = query.ilike("branch", f"%{req.branch.strip()}%")
 
-    data = query.execute().data or []
+    # ✅ 여기에 페이징 전체 가져오기 로직 넣기
+    all_data = []
+    start = 0
+    step = 1000
+
+    while True:
+        res = query.range(start, start + step - 1).execute()
+        if not res.data:
+            break
+        all_data.extend(res.data)
+        if len(res.data) < step:
+            break
+        start += step
+
+    data = all_data  # 👈 전체 데이터를 df로 넘김
     df = pd.DataFrame(data)
 
     if df.empty:
+        print("⚠️ 리포트: 데이터 없음")
         return {
             "summary": {},
             "by_category": {},
@@ -1140,36 +1187,53 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
             "expense_details": []
         }
 
-    # === ✅ 날짜 변환
+    # === Date conversion and cleaning ===
     df["tx_date"] = pd.to_datetime(df["tx_date"], errors="coerce")
     df = df.dropna(subset=["tx_date"])
+    df["branch"] = df["branch"].astype(str).str.strip()
 
-    # === ✅ [1] 기간 필터링 ===
-    if req.start_month and req.end_month:
-        try:
-            start_m = int(req.start_month)
-            end_m = int(req.end_month)
-        except:
-            start_m = req.start_month
-            end_m = req.end_month
+    # === Period (month-range) filtering (KST month logic) ===
+    if req.start_month or req.end_month or req.month:
+        start_m = int(req.start_month or req.month or 1)
+        end_m = int(req.end_month or req.month or start_m)
 
-        df = df[
-            (df["tx_date"].dt.year == req.year)
-            & (df["tx_date"].dt.month >= start_m)
-            & (df["tx_date"].dt.month <= end_m)
-        ]
+        df["year"] = df["tx_date"].dt.year
+        df["month"] = df["tx_date"].dt.month
+
+        before_rows = len(df)
+        df = df[(df["year"] == req.year) & (df["month"].between(start_m, end_m))]
+        after_rows = len(df)
+
+        print(f"🧩 월 기준 필터링: {req.year}-{start_m} ~ {req.year}-{end_m}")
+        print(f"📊 필터 전 행 수: {before_rows}, 필터 후 행 수: {after_rows}")
+
     elif req.year:
         df = df[df["tx_date"].dt.year == req.year]
 
+    # === Optional day-range filtering ===
     if req.granularity == "day" and req.start_date and req.end_date:
         start = pd.to_datetime(req.start_date)
         end = pd.to_datetime(req.end_date)
         df = df[(df["tx_date"] >= start) & (df["tx_date"] <= end)]
 
-    # === ✅ 정렬
+    # === Normalize amounts & categories, remove zeros ===
+    df["amount"] = (
+        df["amount"]
+        .astype(str)
+        .str.replace(r"[^0-9\-\.\+]", "", regex=True)
+        .replace("", "0")
+        .astype(float)
+    )
+    df["category"] = df["category"].fillna("미분류").replace("", "미분류")
+    df = df[df["amount"] != 0]
+    df["is_fixed"] = df.get("is_fixed", False)
+
+    print("💰 금액 합계 검증:", df["amount"].sum(), "건수:", len(df))
+
+    # === Sorting ===
     df = df.sort_values("tx_date", ascending=False)
 
-    # === ✅ 기본 통계 ===
+    # === Summary stats ===
     total_in = df[df["amount"] > 0]["amount"].sum()
     total_out = df[df["amount"] < 0]["amount"].sum()
     summary = {
@@ -1178,10 +1242,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         "net": float(total_in + total_out),
     }
 
-    # === ✅ 카테고리별 (수입 / 고정지출 / 변동지출)
-    df["category"] = df["category"].fillna("미분류")
-    df["is_fixed"] = df.get("is_fixed", False)
-
+    # === By category aggregates ===
     by_category = {
         "income": (
             df[df["amount"] > 0]
@@ -1209,7 +1270,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         ),
     }
 
-    # === ✅ 고정/변동별 ===
+    # === Fixed vs variable totals ===
     by_fixed = (
         df.groupby("is_fixed")["amount"]
         .sum()
@@ -1218,9 +1279,11 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         .to_dict("records")
     )
 
-    # === ✅ [2] 기간 단위(period) 계산 ===
+    # === Period grouping (week/month/day) ===
     if req.granularity == "week":
-        df["period"] = (df["tx_date"] - pd.to_timedelta(df["tx_date"].dt.weekday, unit="D")).dt.strftime("%Y-%m-%d")
+        df["period"] = (
+            df["tx_date"] - pd.to_timedelta(df["tx_date"].dt.weekday, unit="D")
+        ).dt.strftime("%Y-%m-%d")
     elif req.granularity == "month":
         df["period"] = df["tx_date"].dt.strftime("%Y-%m")
     else:
@@ -1240,7 +1303,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         .to_dict("records")
     )
 
-    # === ✅ 상세 내역 ===
+    # === Details ===
     income_details = (
         df[df["amount"] > 0]
         .sort_values("tx_date", ascending=False)
@@ -1248,7 +1311,6 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         .fillna({"memo": ""})
         .to_dict("records")
     )
-
     expense_details = (
         df[df["amount"] < 0]
         .sort_values("tx_date", ascending=False)
@@ -1257,11 +1319,17 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
         .to_dict("records")
     )
 
-    print(f"✅ [reports] user_id={user_id}, role={role}, branch={req.branch}, rows={len(df)}")
+    # === Debug logs ===
+    print(f"✅ [REPORTS] user_id={user_id}, role={role}, branch={req.branch}, rows={len(df)}")
+    print("📅 [최근 거래 5건]")
+    print(df[["tx_date", "description", "amount", "category"]].head(5))
+    print("📅 [가장 오래된 거래 5건]")
+    print(df[["tx_date", "description", "amount", "category"]].tail(5))
 
+    # === Return ===
     return {
         "summary": summary,
-        "by_category": by_category,  # ✅ 변경된 구조
+        "by_category": by_category,
         "by_fixed": by_fixed,
         "by_period": by_period,
         "income_details": income_details,
