@@ -1260,8 +1260,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     print("📅 [가장 오래된 거래 10건]")
     print(df[["tx_date", "description", "amount", "category"]].tail(10))
 
-    print(df[df["tx_date"] < "2025-05-06"][["tx_date", "description", "amount", "category"]].sort_values("tx_date").head(20))
-    print(df[df["tx_date"] < "2025-05-06"][["tx_date", "description", "amount", "category"]].sort_values("tx_date").tail(20))
+    print(df[df["tx_date"].between("2025-05-01", "2025-05-05")][["tx_date", "description", "amount", "category"]])
 
     return {
         "summary": summary,
