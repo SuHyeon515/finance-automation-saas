@@ -1255,7 +1255,11 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     )
 
     print(f"✅ [reports] user_id={user_id}, role={role}, branch={req.branch}, rows={len(df)}")
+    print("📅 [최근 거래 10건]")
     print(df[["tx_date", "description", "amount", "category"]].head(10))
+
+    print("📅 [가장 오래된 거래 10건]")
+    print(df[["tx_date", "description", "amount", "category"]].tail(10))
 
     return {
         "summary": summary,
