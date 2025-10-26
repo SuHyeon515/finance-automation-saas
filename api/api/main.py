@@ -216,10 +216,19 @@ async def upload_file(
     branch: str = Form(...),
     period_year: int = Form(...),
     period_month: int = Form(...),
+    start_month: Optional[str] = Form(None),
+    end_month: Optional[str] = Form(None),
     authorization: Optional[str] = Header(None)
 ):
+    """
+    파일 업로드 (기존 기능 + 기간 지정 기능)
+    - start_month, end_month가 지정되면 해당 범위 데이터만 처리
+    - 지정되지 않으면 기존 단일 월 업로드 방식 그대로 동작
+    """
     user_id = await get_user_id(authorization)
     content = await file.read()
+
+    print(f"📤 업로드 요청: user={user_id}, branch={branch}, start={start_month}, end={end_month}")
 
     # 0️⃣ 새 지점 자동 등록
     try:
@@ -239,7 +248,7 @@ async def upload_file(
     except Exception as e:
         print(f"⚠️ branches 자동등록 중 오류: {e}")
 
-    # 1️⃣ Load spreadsheet
+    # 1️⃣ 엑셀 로드 + 컬럼 정규화
     try:
         df_raw = load_spreadsheet(content, file.filename)
         df = unify_columns(df_raw)
@@ -251,30 +260,55 @@ async def upload_file(
         df['memo'] = ''
     else:
         df['memo'] = df['memo'].fillna('')
-
     df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0.0)
     df = df[df['date'].notna()].copy()
 
-    # 2️⃣ 규칙 적용
+    # 2️⃣ 기간 지정 필터 (선택적)
+    if start_month and end_month:
+        start_date = pd.to_datetime(f"{start_month}-01")
+        end_date = pd.Period(end_month).end_time.to_timestamp()
+        before = len(df)
+        df = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
+        print(f"🗓️ 기간 필터 적용: {start_month} ~ {end_month} ({before} → {len(df)}건)")
+    else:
+        print("🗓️ 단일 월 업로드로 처리")
+
+    # 3️⃣ 규칙 적용
     df['vendor_normalized'] = df['description'].apply(normalize_vendor)
-    rules = supabase.table('rules').select('*').eq('user_id', user_id).eq('is_active', True)\
-        .order('priority', desc=True).execute().data or []
+    rules = (
+        supabase.table('rules')
+        .select('*')
+        .eq('user_id', user_id)
+        .eq('is_active', True)
+        .order('priority', desc=True)
+        .execute()
+        .data
+        or []
+    )
     applied = [apply_rules(row.to_dict(), rules) for _, row in df.iterrows()]
     df = pd.concat([df, pd.DataFrame(applied)], axis=1)
 
-    # 3️⃣ Upload log 기록
-    up = supabase.table('uploads').insert({
+    # 4️⃣ 업로드 로그 기록
+    upload_data = {
         'user_id': user_id,
         'branch': branch,
         'period_year': period_year,
         'period_month': period_month,
         'original_filename': file.filename,
         'total_rows': len(df),
-        'status': 'processed'
-    }).execute()
+        'status': 'processed',
+    }
+
+    # 기간 정보도 기록
+    if start_month:
+        upload_data['start_month'] = start_month
+    if end_month:
+        upload_data['end_month'] = end_month
+
+    up = supabase.table('uploads').insert(upload_data).execute()
     upload_id = up.data[0]['id']
 
-    # 4️⃣ 거래내역 저장
+    # 5️⃣ 거래내역 저장
     recs = []
     for _, r in df.iterrows():
         recs.append({
@@ -290,23 +324,22 @@ async def upload_file(
             'vendor_normalized': r.get('vendor_normalized'),
             'is_fixed': bool(r.get('is_fixed', False))
         })
-    for i in range(0, len(recs), 500):
-        supabase.table('transactions').insert(recs[i:i+500]).execute()
 
-    # ✅ [자산 자동등록] ==============================
+    # 대용량 처리 (500건씩)
+    for i in range(0, len(recs), 500):
+        supabase.table('transactions').insert(recs[i:i + 500]).execute()
+
+    # ✅ [자산 자동등록] 그대로 유지
     try:
         if 'balance' not in df.columns or df.empty:
             print("⚠️ balance 컬럼이 없거나 데이터가 비어 있음 → 자산 자동등록 건너뜀")
         else:
             df['month'] = pd.to_datetime(df['date']).dt.to_period('M')
-
-            # ✅ 각 월별 마지막 날짜의 잔액 직접 추출
             for _, group in df.groupby('month', as_index=False):
                 last_row = group.sort_values('date').iloc[-1]
                 last_balance = float(last_row['balance'] or 0)
                 y, m = map(int, str(last_row['month']).split('-'))
 
-                # ✅ 이번 달 데이터가 이미 있으면 삭제 (중복 방지)
                 memo_pattern = f'{y}년 {m}월 말 잔액 기준 자동등록'
                 supabase.table('assets_log') \
                     .delete() \
@@ -315,7 +348,6 @@ async def upload_file(
                     .ilike('memo', f'%{memo_pattern}%') \
                     .execute()
 
-                # ✅ 다음 달 1일 기준으로 created_at 지정
                 if m == 12:
                     next_y, next_m = y + 1, 1
                 else:
@@ -334,20 +366,28 @@ async def upload_file(
                 }).execute()
 
                 print(f"✅ [{branch}] {y}년 {m}월 자동등록 완료 → {last_balance}")
-
     except Exception as e:
         print(f"⚠️ 자산 자동등록 중 오류 발생: {e}")
 
-    # 6️⃣ Excel 반환
+    # 6️⃣ 결과 엑셀 반환
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='transactions')
     out.seek(0)
 
-    headers = build_download_headers(f"processed_{period_year}-{period_month:02d}_{branch}.xlsx")
-    return Response(content=out.read(),
-                    media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                    headers=headers)
+    # 파일 이름 자동 지정 (기간 반영)
+    if start_month and end_month:
+        filename = f"processed_{start_month}_{end_month}_{branch}.xlsx"
+    else:
+        filename = f"processed_{period_year}-{period_month:02d}_{branch}.xlsx"
+
+    headers = build_download_headers(filename)
+    return Response(
+        content=out.read(),
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers=headers
+    )
+
 
 @app.get("/designer_salaries")
 async def list_designer_salaries(
