@@ -879,10 +879,11 @@ async def list_transactions(
 
     # ✅ 연/월 필터
     if year and month:
-        start = f"{year}-{month:02d}-01"
-        end = f"{year}-{month:02d}-{pd.Period(start).days_in_month:02d}"
-        # ✅ date 타입 비교는 단순 문자열 YYYY-MM-DD로 충분
-        q = q.gte("tx_date", start).lte("tx_date", end)
+        # ✅ start / end를 실제 날짜 객체로 계산
+        start_date = datetime(year, month, 1)
+        end_date = (start_date + pd.offsets.MonthEnd(1)).date()
+
+        q = q.gte("tx_date", start_date.strftime("%Y-%m-%d")).lte("tx_date", end_date.strftime("%Y-%m-%d"))
     elif year:
         q = q.gte("tx_date", f"{year}-01-01").lt("tx_date", f"{year + 1}-01-01")
 
@@ -1152,11 +1153,10 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
             start_m = req.start_month
             end_m = req.end_month
 
-        df = df[
-            (df["tx_date"].dt.year == req.year)
-            & (df["tx_date"].dt.month >= start_m)
-            & (df["tx_date"].dt.month <= end_m)
-        ]
+        start_date = datetime(req.year, start_m, 1)
+        end_date = datetime(req.year, end_m, 28) + pd.offsets.MonthEnd(1)  # 월 말일 자동 계산
+
+        df = df[(df["tx_date"] >= start_date.date()) & (df["tx_date"] <= end_date.date())]
     elif req.year:
         df = df[df["tx_date"].dt.year == req.year]
 
@@ -1257,6 +1257,7 @@ async def get_reports(req: ReportRequest, authorization: Optional[str] = Header(
     )
 
     print(f"✅ [reports] user_id={user_id}, role={role}, branch={req.branch}, rows={len(df)}")
+    print(df[["tx_date", "description", "amount", "category"]].head(10))
 
     return {
         "summary": summary,
