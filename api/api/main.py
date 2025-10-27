@@ -304,19 +304,26 @@ async def upload_file(
 
         print(f"📦 [{branch}] {y}-{m:02d} 데이터 {len(group)}건 저장 중...")
 
+        # ✅ 여기 수정됨 (upload_data 먼저 정의하고 변환)
         upload_data = {
             'user_id': user_id,
             'branch': branch,
-            'period_year': y,
-            'period_month': m,
-            'original_filename': file.filename,
-            'total_rows': len(group),
+            'period_year': int(y),
+            'period_month': int(m),
+            'original_filename': str(file.filename),
+            'total_rows': int(len(group)),
             'status': 'processed',
         }
         if start_month:
             upload_data['start_month'] = start_month
         if end_month:
             upload_data['end_month'] = end_month
+
+        # ✅ numpy.int64, np.float64 등 안전 변환
+        upload_data = {
+            k: (int(v) if isinstance(v, (np.integer,)) else v)
+            for k, v in upload_data.items()
+        }
 
         up = supabase.table('uploads').insert(upload_data).execute()
         upload_id = up.data[0]['id']
