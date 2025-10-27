@@ -17,6 +17,8 @@ type UploadItem = {
 
 export default function UploadsPage() {
   const [uploads, setUploads] = useState<UploadItem[]>([])
+  const [branches, setBranches] = useState<string[]>([]) // ✅ 지점 목록
+  const [selectedBranch, setSelectedBranch] = useState<string>('') // ✅ 선택된 지점
   const [accessToken, setAccessToken] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -34,12 +36,30 @@ export default function UploadsPage() {
     getToken()
   }, [])
 
-  const fetchUploads = async () => {
+  // --- 📦 지점 목록 불러오기
+  const fetchBranches = async () => {
+    if (!accessToken) return
+    try {
+      const res = await fetch(`${API_BASE}/meta/branches`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      })
+      const data = await res.json()
+      setBranches(data || [])
+    } catch (err) {
+      console.error('⚠️ 지점 목록 불러오기 실패:', err)
+    }
+  }
+
+  // --- 📁 업로드 목록 불러오기
+  const fetchUploads = async (branchParam?: string) => {
     if (!accessToken) return
     setLoading(true)
     setError('')
     try {
-      const res = await fetch(`${API_BASE}/uploads`, {
+      const url = new URL(`${API_BASE}/uploads`)
+      if (branchParam) url.searchParams.append('branch', branchParam)
+
+      const res = await fetch(url.toString(), {
         headers: { Authorization: `Bearer ${accessToken}` },
       })
       const data = await res.json()
@@ -52,6 +72,7 @@ export default function UploadsPage() {
     }
   }
 
+  // --- 삭제
   const handleDelete = async (id: string) => {
     if (!confirm('정말 삭제하시겠습니까? 이 업로드의 거래 데이터도 함께 삭제됩니다.')) return
     try {
@@ -59,25 +80,49 @@ export default function UploadsPage() {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${accessToken}` },
       })
-      fetchUploads()
+      fetchUploads(selectedBranch)
     } catch (err) {
       alert('삭제 중 오류가 발생했습니다.')
     }
   }
 
+  // --- 토큰 생기면 데이터 불러오기
   useEffect(() => {
-    if (accessToken) fetchUploads()
+    if (accessToken) {
+      fetchBranches()
+      fetchUploads()
+    }
   }, [accessToken])
 
+  // --- 지점 선택 변경 시 업로드 새로 불러오기
+  useEffect(() => {
+    if (accessToken) fetchUploads(selectedBranch)
+  }, [selectedBranch])
+
   return (
-    <main className="max-w-4xl mx-auto p-6">
+    <main className="max-w-5xl mx-auto p-6">
       <h1 className="text-2xl font-semibold mb-4">🧾 업로드 내역</h1>
+
+      {/* ✅ 지점 선택 드롭다운 */}
+      <div className="mb-4 flex items-center gap-2">
+        <label className="font-medium">지점 선택:</label>
+        <select
+          value={selectedBranch}
+          onChange={(e) => setSelectedBranch(e.target.value)}
+          className="border rounded px-3 py-2"
+        >
+          <option value="">전체보기</option>
+          {branches.map((b) => (
+            <option key={b} value={b}>{b}</option>
+          ))}
+        </select>
+      </div>
 
       {loading && <p>불러오는 중...</p>}
       {error && <p className="text-red-500">{error}</p>}
 
       <div className="space-y-4">
-        {uploads.map(u => (
+        {uploads.map((u) => (
           <div
             key={u.id}
             className="border rounded-lg p-4 flex justify-between items-center bg-white shadow-sm hover:shadow-md transition"

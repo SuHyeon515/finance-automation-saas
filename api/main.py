@@ -284,6 +284,10 @@ async def upload_file(
     applied = [apply_rules(row.to_dict(), rules) for _, row in df.iterrows()]
     df = pd.concat([df, pd.DataFrame(applied)], axis=1)
 
+    # ✅ 여기 추가
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')  # ⬅️ 추가
+    df = df[df['date'].notna()].copy()                       # ⬅️ 추가
+
     # 4️⃣ 월별 자동 분리 (여러 달 업로드 지원)
     df['year'] = df['date'].dt.year
     df['month'] = df['date'].dt.month
