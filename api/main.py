@@ -37,21 +37,15 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 app = FastAPI()
-# ✅ CORS 설정 — 프론트(Vercel) + 로컬환경 모두 허용
 
-origins = [
-    "https://finance-automation-saas-um91.vercel.app",
-    "http://localhost:3000"
-]
-
-# main.py (상단부 CORS 설정 부분)
+# === CORS 설정 (배포 + 로컬 완전 대응 버전) ===
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://finance-automation-saas-um91.vercel.app",  # ✅ 실제 Vercel 프론트
-        "https://finance-automation-saas.vercel.app",       # ✅ 다른 도메인 버전
-        "http://localhost:3000",                            # ✅ 로컬 개발용
-        "https://finance-automation-saas.onrender.com"      # ✅ 자기 자신 추가 (중요!)
+        "https://finance-automation-saas-um91.vercel.app",  # ✅ 실제 운영 프론트 (배포용)
+        "https://finance-automation-saas.vercel.app",       # ✅ 예비 도메인 (리디렉션 등)
+        "http://localhost:3000",                            # ✅ 로컬 개발 환경
+        "https://finance-automation-saas.onrender.com"      # ✅ 백엔드 자기 자신 (내부 요청용)
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -266,7 +260,7 @@ async def upload_file(
     # 2️⃣ 기간 지정 필터 (선택적)
     if start_month and end_month:
         start_date = pd.to_datetime(f"{start_month}-01")
-        end_date = pd.Period(end_month).end_time.to_timestamp()
+        end_date = pd.Period(end_month).end_time  # ✅ 수정됨
         before = len(df)
         df = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
         print(f"🗓️ 기간 필터 적용: {start_month} ~ {end_month} ({before} → {len(df)}건)")

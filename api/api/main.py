@@ -260,7 +260,7 @@ async def upload_file(
     # 2️⃣ 기간 지정 필터 (선택적)
     if start_month and end_month:
         start_date = pd.to_datetime(f"{start_month}-01")
-        end_date = pd.Period(end_month).end_time.to_timestamp()
+        end_date = pd.Period(end_month).end_time  # ✅ 수정됨
         before = len(df)
         df = df[(df['date'] >= start_date) & (df['date'] <= end_date)]
         print(f"🗓️ 기간 필터 적용: {start_month} ~ {end_month} ({before} → {len(df)}건)")
