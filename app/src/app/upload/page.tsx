@@ -50,7 +50,7 @@ export default function UploadPage() {
     formData.append('period_year', String(year))
     formData.append('period_month', String(month))
 
-    // ✅ 기간 지정 시 추가 필드 전송
+    // ✅ 다중월 업로드용 파라미터
     if (startMonth) formData.append('start_month', startMonth)
     if (endMonth) formData.append('end_month', endMonth)
 
@@ -78,7 +78,7 @@ export default function UploadPage() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = filename
+      a.download = decodeURIComponent(filename)
       a.click()
       URL.revokeObjectURL(url)
 
@@ -177,7 +177,11 @@ export default function UploadPage() {
         </button>
       </form>
 
-      {message && <p className="text-center text-sm mt-2">{message}</p>}
+      {message && (
+        <p className="text-center text-sm mt-3 whitespace-pre-wrap">
+          {message}
+        </p>
+      )}
 
       <div className="text-center mt-6">
         <a href="/uploads" className="text-blue-600 hover:underline">
