@@ -83,41 +83,41 @@ export default function ManualSalaryPage() {
   const totalAll = useMemo(() => rows.reduce((sum, r) => sum + totalSalary(r), 0), [rows])
 
   // ✅ 자동 불러오기 (수정 버전)
-const handleAutoLoad = async () => {
-  if (!branch || !listStartMonth || !listEndMonth)
-    return alert('지점과 기간을 모두 선택하세요.')
+  // ✅ 자동 불러오기 (수정 버전)
+  const handleAutoLoad = async () => {
+    if (!branch || !startMonth || !endMonth)
+      return alert('지점과 기간을 모두 선택하세요.')
 
-  setListLoading(true)
-  try {
-    const headers = await apiAuthHeader()
-    const res = await fetch(
-      `${API_BASE}/transactions/salary_auto_load?branch=${encodeURIComponent(branch)}&start=${listStartMonth}&end=${listEndMonth}`,
-      { headers, credentials: 'include' }
-    )
+    setListLoading(true)
+    try {
+      const headers = await apiAuthHeader()
+      const res = await fetch(
+        `${API_BASE}/transactions/salary_auto_load?branch=${encodeURIComponent(branch)}&start=${startMonth}&end=${endMonth}`,
+        { headers, credentials: 'include' }
+      )
 
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data = await res.json()
-    if (!Array.isArray(data)) return alert('조회된 데이터가 없습니다.')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      if (!Array.isArray(data)) return alert('조회된 데이터가 없습니다.')
 
-    // ✅ 이름: 서버에서 받은 r.name 그대로 사용
-    const mapped = data.map((r: any) => ({
-      name: r.name || '이름없음',
-      rank: r.rank || '디자이너',
-      base: Number(r.base || 0),
-      extra: Number(r.extra || 0),
-      sales: Number(r.sales || 0),
-      month: r.month || new Date().toISOString().slice(0, 7),
-    }))
+      const mapped = data.map((r: any) => ({
+        name: r.name || '이름없음',
+        rank: r.rank || '디자이너',
+        base: Number(r.base || 0),
+        extra: Number(r.extra || 0),
+        sales: Number(r.sales || 0),
+        month: r.month || new Date().toISOString().slice(0, 7),
+      }))
 
-    setRows(mapped)
-    alert('✅ 자동 불러오기 완료! (필요 시 수정 후 저장하세요)')
-  } catch (err) {
-    console.error(err)
-    alert('❌ 자동 불러오기 실패')
-  } finally {
-    setListLoading(false)
+      setRows(mapped)
+      alert('✅ 자동 불러오기 완료! (필요 시 수정 후 저장하세요)')
+    } catch (err) {
+      console.error(err)
+      alert('❌ 자동 불러오기 실패')
+    } finally {
+      setListLoading(false)
+    }
   }
-}
 
   // ✅ 저장
   const handleSave = async () => {
