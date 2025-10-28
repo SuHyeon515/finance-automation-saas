@@ -1114,13 +1114,13 @@ async def salary_auto_load(
 ):
     """
     지정된 지점(branch)과 기간(start~end)에 해당하는
-    '월급', '지원비', '배당' 등의 카테고리 거래내역을 자동으로 추출
-    이름(name)은 거래 description 또는 memo에서 자동 추출.
+    '월급', '지원비', '배당' 등의 카테고리 거래내역을 자동으로 추출.
+    이름(name)은 거래 description 필드 그대로 사용.
     """
     user_id = await get_user_id(authorization)
 
     try:
-        # 🔹 거래내역 불러오기
+        # 🔹 거래내역 조회
         res = (
             supabase.table("transactions")
             .select("category, amount, tx_date, description, memo")
@@ -1132,41 +1132,25 @@ async def salary_auto_load(
         )
         rows = res.data or []
 
-        # 🔹 월급/지원비/배당 관련 데이터만 필터링
+        # 🔹 월급 / 지원비 / 배당 관련만 필터링
         filtered = []
         for r in rows:
             cat = (r.get("category") or "").strip()
-            desc = (r.get("description") or "").strip()
-            memo = (r.get("memo") or "").strip()
-            amt = float(r.get("amount") or 0)
             if not any(kw in cat for kw in ["월급", "지원비", "배당"]):
                 continue
 
-            # ✅ 이름 추출 로직
-            # description에서 괄호, “월급”, “지급”, “급여” 같은 단어 제거
-            # 예: “홍길동 급여” → “홍길동”, “이실장 월급” → “이실장”
-            name_candidate = (
-                desc
-                .replace("월급", "")
-                .replace("급여", "")
-                .replace("지급", "")
-                .replace("지원비", "")
-                .replace("배당", "")
-                .replace("입금", "")
-                .replace("송금", "")
-                .strip()
-            )
-            if not name_candidate:
-                name_candidate = memo or "기타"
+            desc = (r.get("description") or "").strip()
+            amt = abs(float(r.get("amount") or 0))
+            month_str = pd.to_datetime(r["tx_date"]).strftime("%Y-%m")
 
             filtered.append({
+                "name": desc,          # ✅ description 그대로 이름 칸에 넣기
                 "category": cat,
-                "name": name_candidate,  # ✅ description에서 자동 인식된 이름
                 "amount": amt,
-                "month": pd.to_datetime(r["tx_date"]).strftime("%Y-%m"),
+                "month": month_str,
             })
 
-        print(f"✅ [salary_auto_load] branch={branch}, 기간={start}~{end}, 건수={len(filtered)}")
+        print(f"✅ [salary_auto_load] branch={branch}, 기간={start}~{end}, 추출={len(filtered)}건")
         return filtered
 
     except Exception as e:
