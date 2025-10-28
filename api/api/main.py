@@ -1115,11 +1115,12 @@ async def salary_auto_load(
     """
     지정된 지점(branch)과 기간(start~end)에 해당하는
     '월급', '지원비', '배당' 등의 카테고리 거래내역을 자동으로 추출.
-    이름(name)은 memo → description 순서로 가져옴.
+    이름(name)은 거래 내용(description)을 그대로 사용.
     """
     user_id = await get_user_id(authorization)
 
     try:
+        # 🔹 거래내역 조회
         res = (
             supabase.table("transactions")
             .select("category, amount, tx_date, description, memo")
@@ -1131,22 +1132,19 @@ async def salary_auto_load(
         )
         rows = res.data or []
 
+        # 🔹 월급 / 지원비 / 배당 관련만 필터링
         filtered = []
         for r in rows:
             cat = (r.get("category") or "").strip()
             if not any(kw in cat for kw in ["월급", "지원비", "배당"]):
                 continue
 
-            desc = (r.get("description") or "").strip()
-            memo = (r.get("memo") or "").strip()
+            desc = (r.get("description") or "").strip()  # ✅ 여기서 이름 사용
             amt = abs(float(r.get("amount") or 0))
             month_str = pd.to_datetime(r["tx_date"]).strftime("%Y-%m")
 
-            # ✅ 이름은 memo → description 순서로 선택
-            name = memo or desc or "이름없음"
-
             filtered.append({
-                "name": name,
+                "name": desc,          # ✅ 이름 = 거래 내용(description)
                 "category": cat,
                 "amount": amt,
                 "month": month_str,
@@ -1158,7 +1156,6 @@ async def salary_auto_load(
     except Exception as e:
         print("❌ 자동 급여 불러오기 오류:", e)
         raise HTTPException(status_code=500, detail=str(e))
-        
     
 # === 유동자산 자동등록 로그 조회 ===
 @app.get("/assets_log/liquid")
