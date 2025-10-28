@@ -2021,8 +2021,6 @@ async def salon_analysis(
 
 ⸻
     """
-
-    # 👉 기존 prompt 이어붙이기 (변경 없이 유지)
     prompt += f"""
 [Ⅱ. 매출 입력(숫자만)]
     • 총매출: {total_sales:,}

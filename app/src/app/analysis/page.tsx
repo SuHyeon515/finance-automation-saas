@@ -29,24 +29,23 @@ export default function GPTSalonAnalysisPage() {
   // 💹 수입 / 지출 요약
   const [incomeTotal, setIncomeTotal] = useState(0)
   const [expenseTotal, setExpenseTotal] = useState(0)
+  const [fixedExpense, setFixedExpense] = useState(0)
+  const [variableExpense, setVariableExpense] = useState(0)
 
   // 👥 인턴 / 방문객
   const [visitorsTotal, setVisitorsTotal] = useState(0)
 
-  // 📊 비교기간 (전월 대신)
-  const [compareSales, setCompareSales] = useState(0)
-  const [compareVisitors, setCompareVisitors] = useState(0)
-  const [comparePrice, setComparePrice] = useState(0)
+  // 📊 비교기간
+  const [compareMonths, setCompareMonths] = useState<string[]>([])
+  const [compareData, setCompareData] = useState<{ month: string; sales: number; visitors: number }[]>([])
+
+  // 💬 리뷰
   const [prevReviews, setPrevReviews] = useState(0)
   const [currentReviews, setCurrentReviews] = useState(0)
 
   // 💇 인건비 데이터
-  const [designerData, setDesignerData] = useState<
-    { name: string; rank: string; month: string; total_amount: number }[]
-  >([])
-  const [monthlyRankStats, setMonthlyRankStats] = useState<
-    { month: string; designers: number; interns: number; advisors: number }[]
-  >([])
+  const [designerData, setDesignerData] = useState<{ name: string; rank: string; month: string; total_amount: number }[]>([])
+  const [monthlyRankStats, setMonthlyRankStats] = useState<{ month: string; designers: number; interns: number; advisors: number }[]>([])
   const [designerLoaded, setDesignerLoaded] = useState(false)
 
   // GPT 분석 결과
@@ -55,29 +54,34 @@ export default function GPTSalonAnalysisPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // ================== 지점 목록 불러오기 ==================
+  // ================== 지점 목록 ==================
   useEffect(() => {
     const loadBranches = async () => {
       try {
         const headers = await apiAuthHeader()
-        const res = await fetch(`${API_BASE}/meta/branches`, {
-          headers,
-          credentials: 'include',
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const res = await fetch(`${API_BASE}/meta/branches`, { headers, credentials: 'include' })
         const json = await res.json()
         setBranches(Array.isArray(json) ? json : [])
-      } catch (err) {
-        console.warn('branches 불러오기 실패:', err)
+      } catch {
         setBranches([])
       }
     }
     loadBranches()
   }, [])
 
-  // ================== 기간 텍스트 ==================
+  // ================== 기간 텍스트 + 비교개월 ==================
   useEffect(() => {
     if (startMonth && endMonth) {
+      const sDate = new Date(startMonth)
+      const eDate = new Date(endMonth)
+      const months: string[] = []
+      while (sDate <= eDate) {
+        const y = sDate.getFullYear()
+        const m = String(sDate.getMonth() + 1).padStart(2, '0')
+        months.push(`${y}-${m}`)
+        sDate.setMonth(sDate.getMonth() + 1)
+      }
+      setCompareMonths(months)
       const s = parseInt(startMonth.split('-')[1])
       const e = parseInt(endMonth.split('-')[1])
       setPeriodText(`${s}~${e}월`)
@@ -103,17 +107,17 @@ export default function GPTSalonAnalysisPage() {
       const data = await res.json()
       setIncomeTotal(data?.income_total || 0)
       setExpenseTotal(data?.expense_total || 0)
+      setFixedExpense(data?.fixed_expense || 0)
+      setVariableExpense(data?.variable_expense || 0)
     } catch (err) {
       console.error('❌ 수입/지출 계산 실패:', err)
-      setIncomeTotal(0)
-      setExpenseTotal(0)
     }
   }
   useEffect(() => {
     fetchAutoSummary()
   }, [branch, startMonth, endMonth])
 
-  // ================== 사업자 유입 (내수금, 기타 제외) ==================
+  // ================== 사업자 유입 ==================
   const fetchBankInflow = async () => {
     if (!branch || !startMonth || !endMonth) return
     try {
@@ -122,11 +126,7 @@ export default function GPTSalonAnalysisPage() {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({
-          branch,
-          start_month: startMonth,
-          end_month: endMonth,
-        }),
+        body: JSON.stringify({ branch, start_month: startMonth, end_month: endMonth }),
       })
       const data = await res.json()
       setBankInflow(data?.bank_inflow || 0)
@@ -156,7 +156,7 @@ export default function GPTSalonAnalysisPage() {
     fetchBalance()
   }, [branch, endMonth])
 
-  // ================== 디자이너/인턴/바이저 급여 조회 ==================
+  // ================== 인건비 ==================
   useEffect(() => {
     if (!branch || !startMonth || !endMonth) return
     const fetchDesigners = async () => {
@@ -177,33 +177,24 @@ export default function GPTSalonAnalysisPage() {
       }
 
       setDesignerData(data || [])
-
-      // ✅ 월별 인원 통계
       const grouped = (data || []).reduce((acc: any, cur: any) => {
         const { month, rank } = cur
         if (!acc[month]) acc[month] = { designers: 0, interns: 0, advisors: 0 }
-        const rankStr = (rank || "").toLowerCase()
-        if (/디자이너|실장|부원장|대표/.test(rankStr)) acc[month].designers++
-        else if (/인턴/.test(rankStr)) acc[month].interns++
-        else if (/바이저|매니저/.test(rankStr)) acc[month].advisors++
+        const r = (rank || '').toLowerCase()
+        if (/디자이너|실장|부원장|대표/.test(r)) acc[month].designers++
+        else if (/인턴/.test(r)) acc[month].interns++
+        else if (/바이저|매니저/.test(r)) acc[month].advisors++
         return acc
       }, {})
-
-      const stats = Object.entries(grouped).map(([month, obj]: any) => ({
-        month,
-        ...obj,
-      }))
-      setMonthlyRankStats(stats)
+      setMonthlyRankStats(Object.entries(grouped).map(([m, o]: any) => ({ month: m, ...o })))
       setDesignerLoaded(true)
     }
     fetchDesigners()
   }, [branch, startMonth, endMonth])
 
-  // ================== GPT 분석 요청 ==================
+  // ================== GPT 분석 ==================
   const handleAnalyze = async () => {
-    if (!branch) return alert('지점을 선택하세요.')
-    if (!startMonth || !endMonth) return alert('기간을 선택하세요.')
-
+    if (!branch || !startMonth || !endMonth) return alert('지점/기간을 선택하세요.')
     setLoading(true)
     setError('')
     setResult('')
@@ -216,13 +207,18 @@ export default function GPTSalonAnalysisPage() {
         start_month: startMonth,
         end_month: endMonth,
         total_sales: totalSales,
+        card_sales: cardSales,
+        pay_sales: paySales,
+        cash_sales: cashSales,
+        account_sales: accountSales,
         bank_inflow: bankInflow,
-        income_total: incomeTotal,
-        expense_total: expenseTotal,
         visitors_total: visitorsTotal,
-        compare_sales: compareSales,
-        compare_visitors: compareVisitors,
-        compare_price: comparePrice,
+        pass_paid_total: passPaidTotal,
+        realized_from_pass: realizedFromPass,
+        pass_balance: passBalance,
+        fixed_expense: fixedExpense,
+        variable_expense: variableExpense,
+        compare_data: compareData,
         current_reviews: currentReviews,
         prev_reviews: prevReviews,
         designer_stats: monthlyRankStats,
@@ -269,87 +265,87 @@ export default function GPTSalonAnalysisPage() {
         </div>
       </div>
 
-      {/* ========== 인원 통계 ========== */}
-      {designerLoaded && monthlyRankStats.length > 0 && (
-        <div className="border rounded-lg p-4 bg-gray-50">
-          <h2 className="font-semibold text-lg mb-2">👥 월별 인원 현황</h2>
-          <table className="w-full text-sm border">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="border p-2">월</th>
-                <th className="border p-2">디자이너 수</th>
-                <th className="border p-2">인턴 수</th>
-                <th className="border p-2">바이저 수</th>
-              </tr>
-            </thead>
-            <tbody>
-              {monthlyRankStats.map((m, i) => (
-                <tr key={i}>
-                  <td className="border p-2">{m.month}</td>
-                  <td className="border p-2 text-center">{m.designers}</td>
-                  <td className="border p-2 text-center">{m.interns}</td>
-                  <td className="border p-2 text-center">{m.advisors}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* ========== 급여내역 ========== */}
-      {designerLoaded && designerData.length > 0 && (
-        <div className="border rounded-lg p-4 bg-gray-50">
-          <h2 className="font-semibold text-lg mb-2">💇 디자이너/인턴 급여내역</h2>
-          <table className="w-full text-sm border">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="border p-2">이름</th>
-                <th className="border p-2">직급</th>
-                <th className="border p-2">월</th>
-                <th className="border p-2 text-right">급여</th>
-              </tr>
-            </thead>
-            <tbody>
-              {designerData.map((d, i) => (
-                <tr key={i}>
-                  <td className="border p-2">{d.name}</td>
-                  <td className="border p-2">{d.rank}</td>
-                  <td className="border p-2">{d.month}</td>
-                  <td className="border p-2 text-right">{d.total_amount.toLocaleString()}원</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* ========== 매출 및 기타 ========== */}
-      <div className="border rounded-lg p-4 bg-gray-50 space-y-4">
-        <h2 className="font-semibold text-lg">💰 매출 / 통장 / 비교기간</h2>
-
-        <div className="grid sm:grid-cols-3 gap-4">
-          <div><label>총 매출</label><input type="number" value={totalSales} onChange={e => setTotalSales(+e.target.value)} className="border rounded px-3 py-2 w-full" /></div>
-          <div><label>사업자 유입총액 (자동)</label><input type="number" value={bankInflow} readOnly className="border rounded px-3 py-2 w-full bg-gray-100" /></div>
-          <div><label>잔액</label><input type="number" value={cashBalance} readOnly className="border rounded px-3 py-2 w-full bg-gray-100" /></div>
-        </div>
-
-        <div className="grid sm:grid-cols-3 gap-4">
-          <div><label>비교기간 매출</label><input type="number" value={compareSales} onChange={e => setCompareSales(+e.target.value)} className="border rounded px-3 py-2 w-full" /></div>
-          <div><label>비교기간 방문객 수</label><input type="number" value={compareVisitors} onChange={e => setCompareVisitors(+e.target.value)} className="border rounded px-3 py-2 w-full" /></div>
-          <div><label>비교기간 객단가</label><input type="number" value={comparePrice} onChange={e => setComparePrice(+e.target.value)} className="border rounded px-3 py-2 w-full" /></div>
+      {/* 💳 매출 상세 입력 */}
+      <div className="border rounded-lg p-4 bg-gray-50 space-y-3">
+        <h2 className="font-semibold text-lg">💰 매출 세부 입력</h2>
+        <div className="grid sm:grid-cols-4 gap-4">
+          <div><label>카드매출</label><input type="number" value={cardSales} onChange={e => setCardSales(+e.target.value)} className="border rounded px-3 py-2 w-full" /></div>
+          <div><label>페이매출</label><input type="number" value={paySales} onChange={e => setPaySales(+e.target.value)} className="border rounded px-3 py-2 w-full" /></div>
+          <div><label>현금매출</label><input type="number" value={cashSales} onChange={e => setCashSales(+e.target.value)} className="border rounded px-3 py-2 w-full" /></div>
+          <div><label>계좌이체</label><input type="number" value={accountSales} onChange={e => setAccountSales(+e.target.value)} className="border rounded px-3 py-2 w-full" /></div>
         </div>
       </div>
 
-      {/* GPT 분석 */}
+      {/* 🧾 정액권 */}
+      <div className="border rounded-lg p-4 bg-gray-50 space-y-3">
+        <h2 className="font-semibold text-lg">🧾 정액권 내역</h2>
+        <div className="grid sm:grid-cols-3 gap-4">
+          <div><label>결제금액</label><input type="number" value={passPaidTotal} onChange={e => setPassPaidTotal(+e.target.value)} className="border rounded px-3 py-2 w-full" /></div>
+          <div><label>차감금액</label><input type="number" value={realizedFromPass} onChange={e => setRealizedFromPass(+e.target.value)} className="border rounded px-3 py-2 w-full" /></div>
+          <div><label>잔액 (자동)</label><input type="number" readOnly value={passBalance} className="border rounded px-3 py-2 w-full bg-gray-100" /></div>
+        </div>
+      </div>
+
+      {/* 💹 지출 */}
+      <div className="border rounded-lg p-4 bg-gray-50 space-y-3">
+        <h2 className="font-semibold text-lg">💸 지출 요약</h2>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div><label>고정지출</label><input type="number" readOnly value={fixedExpense} className="border rounded px-3 py-2 w-full bg-gray-100" /></div>
+          <div><label>변동지출</label><input type="number" readOnly value={variableExpense} className="border rounded px-3 py-2 w-full bg-gray-100" /></div>
+        </div>
+      </div>
+
+      {/* 📊 비교기간 동적 입력 */}
+      {compareMonths.map((m, i) => (
+        <div key={m} className="border rounded-lg p-4 bg-gray-50 space-y-2">
+          <h2 className="font-semibold text-lg">{m} 비교 입력</h2>
+          <div className="grid sm:grid-cols-3 gap-4">
+            <div><label>매출</label><input type="number" onChange={e => {
+              const val = +e.target.value
+              setCompareData(prev => {
+                const copy = [...prev]
+                copy[i] = { ...copy[i], month: m, sales: val, visitors: copy[i]?.visitors || 0 }
+                return copy
+              })
+            }} className="border rounded px-3 py-2 w-full" /></div>
+            <div><label>방문객</label><input type="number" onChange={e => {
+              const val = +e.target.value
+              setCompareData(prev => {
+                const copy = [...prev]
+                copy[i] = { ...copy[i], month: m, visitors: val, sales: copy[i]?.sales || 0 }
+                return copy
+              })
+            }} className="border rounded px-3 py-2 w-full" /></div>
+            <div><label>객단가 (자동)</label><input readOnly value={
+              compareData[i]?.visitors ? Math.round(compareData[i].sales / compareData[i].visitors) : 0
+            } className="border rounded px-3 py-2 w-full bg-gray-100" /></div>
+          </div>
+        </div>
+      ))}
+
+      {/* 💬 리뷰 */}
+      <div className="border rounded-lg p-4 bg-gray-50 space-y-3">
+        <h2 className="font-semibold text-lg">💬 리뷰 현황</h2>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div><label>이전 리뷰 수</label><input type="number" value={prevReviews} onChange={e => setPrevReviews(+e.target.value)} className="border rounded px-3 py-2 w-full" /></div>
+          <div><label>현재 리뷰 수</label><input type="number" value={currentReviews} onChange={e => setCurrentReviews(+e.target.value)} className="border rounded px-3 py-2 w-full" /></div>
+        </div>
+      </div>
+
+      {/* GPT 분석 버튼 */}
       <button onClick={handleAnalyze} disabled={loading} className="w-full bg-black text-white py-3 rounded-lg hover:opacity-80 disabled:opacity-50">
         {loading ? 'GPT 분석 중...' : 'GPT로 재무 분석 요청'}
       </button>
 
+      {/* 결과 출력 */}
       {error && <p className="text-red-500">{error}</p>}
+
       {result && (
         <div className="bg-white rounded-lg p-6 shadow-sm mt-6">
           {title && <h2 className="text-lg font-semibold mb-2">{title}</h2>}
-          <pre className="whitespace-pre-wrap leading-relaxed text-gray-800">{result}</pre>
+          <pre className="whitespace-pre-wrap leading-relaxed text-gray-800">
+            {result}
+          </pre>
         </div>
       )}
     </main>
