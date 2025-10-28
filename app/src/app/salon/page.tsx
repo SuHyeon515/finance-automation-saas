@@ -95,16 +95,15 @@ export default function SalonDataEntryPage() {
     if (!user) return alert('로그인 필요')
 
     const { error } = await supabase
-      .from('salon_monthly_data')
-      .upsert({
-        user_id: user.id,
-        branch,
-        month,
-        ...form,
-        total_sales: totalSales,
-        pass_balance: passBalance,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'user_id,branch,month' })
+        .from('salon_monthly_data')
+        .upsert({
+            user_id: user.id,
+            branch,
+            month,
+            ...form,
+            total_sales: totalSales,
+            updated_at: new Date().toISOString()
+        }, { onConflict: 'user_id,branch,month' })
 
     if (error) alert('저장 실패: ' + error.message)
     else {
