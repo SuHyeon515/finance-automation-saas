@@ -81,14 +81,13 @@ export default function ManualSalaryPage() {
   // ✅ 총급여 계산
   const totalSalary = (r: DesignerInput) => r.base + (r.extra || 0)
   const totalAll = useMemo(() => rows.reduce((sum, r) => sum + totalSalary(r), 0), [rows])
-
-  // ✅ 자동 불러오기 (수정 버전)
+  const [autoLoading, setAutoLoading] = useState(false)
   // ✅ 자동 불러오기 (수정 버전)
   const handleAutoLoad = async () => {
     if (!branch || !startMonth || !endMonth)
       return alert('지점과 기간을 모두 선택하세요.')
 
-    setListLoading(true)
+    setAutoLoading(true) // ✅ 변경
     try {
       const headers = await apiAuthHeader()
       const res = await fetch(
@@ -115,7 +114,7 @@ export default function ManualSalaryPage() {
       console.error(err)
       alert('❌ 자동 불러오기 실패')
     } finally {
-      setListLoading(false)
+      setAutoLoading(false) // ✅ 변경
     }
   }
 
@@ -250,10 +249,10 @@ export default function ManualSalaryPage() {
               </div>
               <button
                 onClick={handleAutoLoad}
-                disabled={listLoading}
+                disabled={autoLoading}
                 className="bg-purple-600 text-white px-3 py-1 rounded"
               >
-                {listLoading ? '불러오는 중...' : '⚙️ 자동 불러오기'}
+                {autoLoading ? '불러오는 중...' : '⚙️ 자동 불러오기'}
               </button>
             </div>
             <button
