@@ -1599,8 +1599,8 @@ async def transaction_summary(
         monthly_summary = (
             df.groupby(["month"])
             .apply(lambda x: pd.Series({
-                "fixed_expense": abs(x.loc[x["is_fixed"] == True, "amount"].sum()),
-                "variable_expense": abs(x.loc[x["is_fixed"] == False, "amount"].sum()),
+                    "fixed_expense": abs(x.loc[x["is_fixed"] == True, "amount"].clip(upper=0).sum()),
+                    "variable_expense": abs(x.loc[x["is_fixed"] == False, "amount"].clip(upper=0).sum()),
             }))
             .reset_index()
         )
@@ -1858,8 +1858,8 @@ async def get_monthly_data(
             .order("month", desc=False)
             .execute()
         )
+        data = sorted(res.data or [], key=lambda x: x["month"])
 
-        data = res.data or []
         print(f"✅ [salon_monthly_data] {branch} {start_month}~{end_month} ({len(data)}건)")
         return {"months": data}
 
