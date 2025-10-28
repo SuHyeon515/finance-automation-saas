@@ -20,19 +20,173 @@ const ReportPDFButton = dynamic(() => import('@/components/ReportPDFButton'), { 
 const formatCurrency = (n: number) =>
   (n ?? 0).toLocaleString('ko-KR', { style: 'currency', currency: 'KRW' })
 
-// 밝기 계산 (배경색이 밝은지 어두운지 판별)
 function getTextColor(hexColor: string) {
-  const c = hexColor.substring(1) // # 제거
+  const c = hexColor.substring(1)
   const rgb = parseInt(c, 16)
   const r = (rgb >> 16) & 0xff
   const g = (rgb >> 8) & 0xff
   const b = rgb & 0xff
   const brightness = (r * 299 + g * 587 + b * 114) / 1000
-  return brightness > 150 ? '#222' : '#fff' // 밝으면 검정, 어두우면 흰색
+  return brightness > 150 ? '#222' : '#fff'
+}
+
+const PIE_COLORS = [
+  '#16a34a',
+  '#22c55e',
+  '#10b981',
+  '#0ea5e9',
+  '#6366f1',
+  '#8b5cf6',
+  '#f97316',
+  '#f59e0b',
+  '#ef4444',
+  '#dc2626',
+]
+
+// ✅ [신규] 표만 접는 섹션 컴포넌트
+function ReportSection({ blk }: any) {
+  const [open, setOpen] = useState(true)
+
+  return (
+    <section className="bg-white border rounded-xl shadow-sm p-6 space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className={`text-xl font-semibold ${blk.colorText}`}>{blk.title}</h2>
+        <button
+          onClick={() => setOpen(!open)}
+          className="text-sm text-gray-500 hover:text-gray-800 border rounded px-3 py-1"
+        >
+          {open ? '▲ 표 접기' : '▼ 표 펼치기'}
+        </button>
+      </div>
+
+      {/* ✅ 파이차트 + 카테고리 요약표는 항상 보이게 */}
+      <div className="flex flex-col md:flex-row items-start gap-6">
+        <div className="flex-1">
+          <ResponsiveContainer width="100%" height={300}>
+            <PieChart>
+              <Pie
+                data={blk.chartData.map((d: any) => ({
+                  name: d.category,
+                  value: d.amount,
+                }))}
+                dataKey="value"
+                nameKey="name"
+                outerRadius={100}
+                labelLine={false}
+                label={({ cx, cy, midAngle, innerRadius, outerRadius, percent, name, index }) => {
+                  const RADIAN = Math.PI / 180
+                  const radius = innerRadius + (outerRadius - innerRadius) * 0.6
+                  const x = cx + radius * Math.cos(-midAngle * RADIAN)
+                  const y = cy + radius * Math.sin(-midAngle * RADIAN)
+                  const color = getTextColor(PIE_COLORS[index % PIE_COLORS.length])
+                  return (
+                    <text
+                      x={x}
+                      y={y}
+                      fill={color}
+                      textAnchor="middle"
+                      dominantBaseline="central"
+                      fontSize={12}
+                      fontWeight="600"
+                    >
+                      {`${name} ${(percent * 100).toFixed(0)}%`}
+                    </text>
+                  )
+                }}
+              >
+                {blk.chartData.map((_: any, i: number) => (
+                  <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip formatter={(v: number) => formatCurrency(v)} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="flex-1 overflow-x-auto">
+          <table className="w-full text-sm border border-gray-200 rounded-lg">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="p-2 border">분류</th>
+                <th className="p-2 border text-right">비율</th>
+                <th className="p-2 border text-right">금액</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(() => {
+                const total = blk.chartData.reduce((s: number, v: any) => s + v.amount, 0)
+                return (
+                  <>
+                    {blk.chartData.map((r: any, i: number) => {
+                      const percent = total ? (r.amount / total) * 100 : 0
+                      return (
+                        <tr key={i}>
+                          <td className="p-2 border text-gray-800">{r.category}</td>
+                          <td className="p-2 border text-right text-gray-500">{percent.toFixed(2)}%</td>
+                          <td className={`p-2 border text-right ${blk.tableColor}`}>
+                            {formatCurrency(r.amount)}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                    <tr className="bg-gray-100 font-semibold">
+                      <td className="p-2 border text-gray-900">합계</td>
+                      <td className="p-2 border text-right text-gray-700">100.00%</td>
+                      <td className={`p-2 border text-right ${blk.tableColor}`}>
+                        {formatCurrency(total)}
+                      </td>
+                    </tr>
+                  </>
+                )
+              })()}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ✅ 표(날짜별 내역)는 접기 가능 */}
+      {open && (
+        <div className="overflow-x-auto transition-all duration-300">
+          <table className="w-full text-sm border border-gray-200 rounded-lg mt-2">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="p-2 border">날짜</th>
+                <th className="p-2 border">내용</th>
+                <th className="p-2 border">카테고리</th>
+                <th className="p-2 border text-right">금액</th>
+                <th className="p-2 border">메모</th>
+              </tr>
+            </thead>
+            <tbody>
+              {blk.rows.length > 0 ? (
+                blk.rows.map((r: any, i: number) => (
+                  <tr key={i}>
+                    <td className="p-2">{r.tx_date}</td>
+                    <td className="p-2">{r.description}</td>
+                    <td className="p-2">{r.category || '미분류'}</td>
+                    <td className={`p-2 text-right ${blk.tableColor}`}>
+                      {formatCurrency(Math.abs(r.amount))}
+                    </td>
+                    <td className="p-2 text-gray-600">{r.memo || '-'}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={5} className="text-center text-gray-400 p-3">
+                    내역 없음
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
 }
 
 // ============================
-// 리포트 페이지
+// 리포트 페이지 본문
 // ============================
 export default function ReportsPage() {
   const now = new Date()
@@ -47,14 +201,15 @@ export default function ReportsPage() {
   const [endMonth, setEndMonth] = useState(month)
   const reportRef = useRef<HTMLDivElement>(null)
 
-  // ===========================
-  // 초기 데이터
-  // ===========================
+  // ✅ 기존 로직 그대로 유지
   useEffect(() => {
     const loadBranches = async () => {
       try {
         const headers = await apiAuthHeader()
-        const res = await fetch(`${API_BASE}/meta/branches`, { headers, credentials: 'include' })
+        const res = await fetch(`${API_BASE}/meta/branches`, {
+          headers,
+          credentials: 'include',
+        })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const json = await res.json()
         setBranches(Array.isArray(json) ? json : [])
@@ -85,25 +240,27 @@ export default function ReportsPage() {
       })
       if (!res.ok) throw new Error(await res.text())
       const result = await res.json()
+
       result.by_category ??= []
       result.expense_details ??= []
       result.income_details ??= []
       result.summary ??= { total_in: 0, total_out: 0, net: 0 }
+
       // ✅ 한국시간으로 보정된 tx_date 추가
-      if (Array.isArray(result.income_details)) {
-        result.income_details = result.income_details.map((r: any) => {
+      const fixDate = (arr: any[]) =>
+        arr.map((r: any) => {
           const d = new Date(r.tx_date)
           const local = new Date(d.getTime() + 9 * 60 * 60 * 1000)
           return { ...r, tx_date: local.toISOString().slice(0, 10) }
         })
-      }
-      if (Array.isArray(result.expense_details)) {
-        result.expense_details = result.expense_details.map((r: any) => {
-          const d = new Date(r.tx_date)
-          const local = new Date(d.getTime() + 9 * 60 * 60 * 1000)
-          return { ...r, tx_date: local.toISOString().slice(0, 10) }
-        })
-      }
+
+      result.income_details = Array.isArray(result.income_details)
+        ? fixDate(result.income_details)
+        : []
+      result.expense_details = Array.isArray(result.expense_details)
+        ? fixDate(result.expense_details)
+        : []
+
       setData(result)
     } catch (e: any) {
       setError(e.message || '불러오기 실패')
@@ -116,11 +273,14 @@ export default function ReportsPage() {
     loadReport()
   }, [])
 
-  // ===========================
-  // 데이터 계산
-  // ===========================
-  const fixedRows = useMemo(() => data?.expense_details?.filter((r: any) => r.is_fixed) || [], [data])
-  const variableRows = useMemo(() => data?.expense_details?.filter((r: any) => !r.is_fixed) || [], [data])
+  const fixedRows = useMemo(
+    () => data?.expense_details?.filter((r: any) => r.is_fixed) || [],
+    [data]
+  )
+  const variableRows = useMemo(
+    () => data?.expense_details?.filter((r: any) => !r.is_fixed) || [],
+    [data]
+  )
   const incomeRows = useMemo(() => data?.income_details || [], [data])
 
   const mergeUnclassified = (arr: any[], key: string) => {
@@ -129,7 +289,10 @@ export default function ReportsPage() {
       const cat = r[key] && r[key].trim() ? r[key] : '미분류'
       grouped[cat] = (grouped[cat] || 0) + Math.abs(r.amount || r.sum || 0)
     })
-    return Object.entries(grouped).map(([category, amount]) => ({ category, amount }))
+    return Object.entries(grouped).map(([category, amount]) => ({
+      category,
+      amount,
+    }))
   }
 
   const stats = [
@@ -138,19 +301,12 @@ export default function ReportsPage() {
     { label: '순이익', value: data?.summary?.net || 0, color: 'text-blue-600', bg: 'bg-blue-50' },
   ]
 
-  const PIE_COLORS = ['#16a34a', '#22c55e', '#10b981', '#0ea5e9', '#6366f1', '#8b5cf6', '#f97316', '#f59e0b', '#ef4444', '#dc2626']
-
-  // ===========================
-  // 렌더링
-  // ===========================
   return (
     <main className="p-6 space-y-8 bg-gray-100 min-h-screen">
       <header className="flex flex-wrap items-end gap-3">
         <h1 className="text-2xl font-bold">📘 리포트 (수입 + 지출)</h1>
         {!!branch && (
-          <span className="ml-2 rounded-full bg-black/80 text-white text-xs px-2 py-1">
-            {branch}
-          </span>
+          <span className="ml-2 rounded-full bg-black/80 text-white text-xs px-2 py-1">{branch}</span>
         )}
       </header>
 
@@ -162,10 +318,10 @@ export default function ReportsPage() {
             <select
               className="border rounded px-3 py-2"
               value={branch}
-              onChange={e => setBranch(e.target.value)}
+              onChange={(e) => setBranch(e.target.value)}
             >
               <option value="">전체</option>
-              {branches.map(b => (
+              {branches.map((b) => (
                 <option key={b}>{b}</option>
               ))}
             </select>
@@ -177,7 +333,7 @@ export default function ReportsPage() {
               type="number"
               className="border rounded px-3 py-2 w-24"
               value={year}
-              onChange={e => setYear(Number(e.target.value))}
+              onChange={(e) => setYear(Number(e.target.value))}
             />
           </div>
 
@@ -189,7 +345,7 @@ export default function ReportsPage() {
               max={12}
               className="border rounded px-3 py-2 w-20"
               value={startMonth}
-              onChange={e => setStartMonth(Number(e.target.value))}
+              onChange={(e) => setStartMonth(Number(e.target.value))}
             />
           </div>
 
@@ -201,18 +357,14 @@ export default function ReportsPage() {
               max={12}
               className="border rounded px-3 py-2 w-20"
               value={endMonth}
-              onChange={e => setEndMonth(Number(e.target.value))}
+              onChange={(e) => setEndMonth(Number(e.target.value))}
             />
           </div>
 
-          <button
-            onClick={loadReport}
-            className="ml-auto bg-black text-white rounded px-4 py-2 hover:opacity-80"
-          >
+          <button onClick={loadReport} className="ml-auto bg-black text-white rounded px-4 py-2 hover:opacity-80">
             조회
           </button>
 
-          {/* ✅ PDF 저장 버튼 */}
           <ReportPDFButton
             elementId="report-container"
             title={`${branch || '전체지점'}_${year}_${startMonth}~${endMonth}_리포트`}
@@ -224,9 +376,7 @@ export default function ReportsPage() {
             {stats.map((s, i) => (
               <div key={i} className={`rounded-lg ${s.bg} border p-4`}>
                 <div className="text-xs text-gray-500">{s.label}</div>
-                <div className={`text-lg font-bold ${s.color}`}>
-                  {formatCurrency(s.value)}
-                </div>
+                <div className={`text-lg font-bold ${s.color}`}>{formatCurrency(s.value)}</div>
               </div>
             ))}
           </div>
@@ -237,188 +387,32 @@ export default function ReportsPage() {
       {error && <p className="text-red-500">{error}</p>}
 
       {data && (
-        <div
-          id="report-container"
-          ref={reportRef}
-          className="bg-white p-6 rounded-xl space-y-10"
-          style={{ minWidth: '210mm', maxWidth: '210mm', margin: '0 auto' }}
-        >
+        <div id="report-container" ref={reportRef} className="bg-white p-6 rounded-xl space-y-10">
           {[
             {
               title: '📈 수입',
               colorText: 'text-green-700',
               rows: incomeRows,
-              chartData: mergeUnclassified(
-                (data?.by_category?.income ?? []).map((v: any) => ({
-                  category: v.category || '미분류',
-                  amount: Math.abs(v.sum || 0),
-                })),
-                'category'
-              ),
+              chartData: mergeUnclassified(data?.by_category?.income ?? [], 'category'),
               tableColor: 'text-green-600',
             },
             {
               title: '🏠 고정지출',
               colorText: 'text-indigo-700',
               rows: fixedRows,
-              chartData: mergeUnclassified(
-                (data?.by_category?.fixed_expense ?? []).map((v: any) => ({
-                  category: v.category || '미분류',
-                  amount: Math.abs(v.sum || 0),
-                })),
-                'category'
-              ),
+              chartData: mergeUnclassified(data?.by_category?.fixed_expense ?? [], 'category'),
               tableColor: 'text-indigo-600',
             },
             {
               title: '🚗 변동지출',
               colorText: 'text-orange-700',
               rows: variableRows,
-              chartData: mergeUnclassified(
-                (data?.by_category?.variable_expense ?? []).map((v: any) => ({
-                  category: v.category || '미분류',
-                  amount: Math.abs(v.sum || 0),
-                })),
-                'category'
-              ),
+              chartData: mergeUnclassified(data?.by_category?.variable_expense ?? [], 'category'),
               tableColor: 'text-orange-600',
             },
-          ].map((blk, idx) => {
-            const [open, setOpen] = useState(true) // ✅ 표만 접기용 상태
-            return (
-              <section key={idx} className="bg-white border rounded-xl shadow-sm p-6 space-y-6">
-                <div className="flex justify-between items-center">
-                  <h2 className={`text-xl font-semibold ${blk.colorText}`}>{blk.title}</h2>
-                  <button
-                    onClick={() => setOpen(!open)}
-                    className="text-sm text-gray-500 hover:text-gray-800 border rounded px-3 py-1"
-                  >
-                    {open ? '▲ 표 접기' : '▼ 표 펼치기'}
-                  </button>
-                </div>
-
-                {/* ✅ 파이차트 + 분류표는 항상 표시 */}
-                <div className="flex flex-col md:flex-row items-start gap-6">
-                  <div className="flex-1">
-                    <ResponsiveContainer width="100%" height={300}>
-                      <PieChart>
-                        <Pie
-                          data={blk.chartData.map(d => ({ name: d.category, value: d.amount }))}
-                          dataKey="value"
-                          nameKey="name"
-                          outerRadius={100}
-                          labelLine={false}
-                          label={({ cx, cy, midAngle, innerRadius, outerRadius, percent, name, index }) => {
-                            const RADIAN = Math.PI / 180
-                            const radius = innerRadius + (outerRadius - innerRadius) * 0.6
-                            const x = cx + radius * Math.cos(-midAngle * RADIAN)
-                            const y = cy + radius * Math.sin(-midAngle * RADIAN)
-                            const color = getTextColor(PIE_COLORS[index % PIE_COLORS.length])
-                            return (
-                              <text
-                                x={x}
-                                y={y}
-                                fill={color}
-                                textAnchor="middle"
-                                dominantBaseline="central"
-                                fontSize={12}
-                                fontWeight="600"
-                              >
-                                {`${name} ${(percent * 100).toFixed(0)}%`}
-                              </text>
-                            )
-                          }}
-                        >
-                          {blk.chartData.map((_: any, i: number) => (
-                            <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip formatter={(v: number) => formatCurrency(v)} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-
-                  <div className="flex-1 overflow-x-auto">
-                    <table className="w-full text-sm border border-gray-200 rounded-lg">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="p-2 border">분류</th>
-                          <th className="p-2 border text-right">비율</th>
-                          <th className="p-2 border text-right">금액</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(() => {
-                          const total = blk.chartData.reduce((s: number, v: any) => s + v.amount, 0)
-                          return (
-                            <>
-                              {blk.chartData.map((r: any, i: number) => {
-                                const percent = total ? (r.amount / total) * 100 : 0
-                                return (
-                                  <tr key={i}>
-                                    <td className="p-2 border text-gray-800">{r.category}</td>
-                                    <td className="p-2 border text-right text-gray-500">{percent.toFixed(2)}%</td>
-                                    <td className={`p-2 border text-right ${blk.tableColor}`}>
-                                      {formatCurrency(r.amount)}
-                                    </td>
-                                  </tr>
-                                )
-                              })}
-                              <tr className="bg-gray-100 font-semibold">
-                                <td className="p-2 border text-gray-900">합계</td>
-                                <td className="p-2 border text-right text-gray-700">100.00%</td>
-                                <td className={`p-2 border text-right ${blk.tableColor}`}>
-                                  {formatCurrency(total)}
-                                </td>
-                              </tr>
-                            </>
-                          )
-                        })()}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {/* ✅ 이 아래 표만 접힘 */}
-                {open && (
-                  <div className="overflow-x-auto transition-all duration-300">
-                    <table className="w-full text-sm border border-gray-200 rounded-lg mt-2">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="p-2 border">날짜</th>
-                          <th className="p-2 border">내용</th>
-                          <th className="p-2 border">카테고리</th>
-                          <th className="p-2 border text-right">금액</th>
-                          <th className="p-2 border">메모</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {blk.rows.length > 0 ? (
-                          blk.rows.map((r: any, i: number) => (
-                            <tr key={i}>
-                              <td className="p-2">{r.tx_date}</td>
-                              <td className="p-2">{r.description}</td>
-                              <td className="p-2">{r.category || '미분류'}</td>
-                              <td className={`p-2 text-right ${blk.tableColor}`}>
-                                {formatCurrency(Math.abs(r.amount))}
-                              </td>
-                              <td className="p-2 text-gray-600">{r.memo || '-'}</td>
-                            </tr>
-                          ))
-                        ) : (
-                          <tr>
-                            <td colSpan={5} className="text-center text-gray-400 p-3">
-                              내역 없음
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </section>
-            )
-          })}
+          ].map((blk, idx) => (
+            <ReportSection key={idx} blk={blk} />
+          ))}
         </div>
       )}
     </main>
