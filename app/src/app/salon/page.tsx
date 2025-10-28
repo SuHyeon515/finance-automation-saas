@@ -94,7 +94,7 @@ export default function SalonDataEntryPage() {
     const user = (await supabase.auth.getUser()).data.user
     if (!user) return alert('로그인 필요')
 
-    const { error } = await supabase
+        const { error } = await supabase
         .from('salon_monthly_data')
         .upsert({
             user_id: user.id,
@@ -102,6 +102,7 @@ export default function SalonDataEntryPage() {
             month,
             ...form,
             total_sales: totalSales,
+            pass_balance: passBalance,   // ✅ 추가
             updated_at: new Date().toISOString()
         }, { onConflict: 'user_id,branch,month' })
 

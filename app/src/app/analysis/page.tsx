@@ -3,6 +3,12 @@ import { useEffect, useState } from 'react'
 import { API_BASE, apiAuthHeader } from '@/lib/api'
 import { supabase } from '@/lib/supabaseClient'
 
+type SalaryItem = {
+  name: string
+  rank: string
+  total_amount: number
+}
+
 type MonthBlock = {
   month: string
   card_sales: number
@@ -17,7 +23,7 @@ type MonthBlock = {
   designers_count: number
   interns_count: number
   advisors_count: number
-  salaries: { name: string; rank: string; total_amount: number }[]
+  salaries: SalaryItem[]
   fixed_expense: number
   variable_expense: number
 }
@@ -28,18 +34,16 @@ export default function GPTSalonAnalysisPage() {
   const [startMonth, setStartMonth] = useState('')
   const [endMonth, setEndMonth] = useState('')
   const [monthBlocks, setMonthBlocks] = useState<MonthBlock[]>([])
-  const [openMonths, setOpenMonths] = useState<Record<string, boolean>>({}) // ✅ 펼치기/접기 상태
-
+  const [openMonths, setOpenMonths] = useState<Record<string, boolean>>({})
   const [bankInflow, setBankInflow] = useState(0)
   const [cashBalance, setCashBalance] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // 정액권 전체 계산
+  // 전체 정액권 / 지출 합계
   const totalPassPaid = monthBlocks.reduce((s, b) => s + (b.pass_paid || 0), 0)
   const totalPassUsed = monthBlocks.reduce((s, b) => s + (b.pass_used || 0), 0)
   const totalPassBalance = totalPassPaid - totalPassUsed
-
   const totalFixedExpense = monthBlocks.reduce((s, b) => s + (b.fixed_expense || 0), 0)
   const totalVariableExpense = monthBlocks.reduce((s, b) => s + (b.variable_expense || 0), 0)
   const totalExpense = totalFixedExpense + totalVariableExpense
@@ -49,10 +53,7 @@ export default function GPTSalonAnalysisPage() {
     const loadBranches = async () => {
       try {
         const headers = await apiAuthHeader()
-        const res = await fetch(`${API_BASE}/meta/branches`, {
-          headers,
-          credentials: 'include',
-        })
+        const res = await fetch(`${API_BASE}/meta/branches`, { headers, credentials: 'include' })
         const json = await res.json()
         setBranches(Array.isArray(json) ? json : [])
       } catch {
@@ -62,17 +63,17 @@ export default function GPTSalonAnalysisPage() {
     loadBranches()
   }, [])
 
-  // ───────── 월별 데이터 + 급여 + 지출 불러오기 ─────────
+  // ───────── 월별 데이터 + 급여 + 지출 ─────────
   useEffect(() => {
     if (!branch || !startMonth || !endMonth) return
 
-    const fetchData = async () => {
+    const fetchAll = async () => {
       setLoading(true)
       setError('')
       try {
         const headers = await apiAuthHeader()
 
-        // 1️⃣ salon_monthly_data
+        // 1️⃣ 월별 매출/방문객/리뷰
         const res = await fetch(`${API_BASE}/salon/monthly-data`, {
           method: 'POST',
           headers: { ...headers, 'Content-Type': 'application/json' },
@@ -99,38 +100,28 @@ export default function GPTSalonAnalysisPage() {
           }
         })
 
-        // 3️⃣ 급여/인원
-        const { data: salData } = await supabase
+        // 3️⃣ 급여 및 인원수 계산
+        const { data: salaryData, error: salaryError } = await supabase
           .from('designer_salaries')
           .select('name, rank, month, total_amount')
           .eq('branch', branch)
           .gte('month', startMonth)
           .lte('month', endMonth)
+        if (salaryError) console.error('급여 데이터 오류:', salaryError)
 
-        const salaryByMonth: Record<
-          string,
-          {
-            designers_count: number
-            interns_count: number
-            advisors_count: number
-            salaries: { name: string; rank: string; total_amount: number }[]
-          }
-        > = {}
-
-        salData?.forEach((r) => {
+        // 인원 통계
+        const salaryByMonth: Record<string, { designers_count: number; interns_count: number; advisors_count: number; salaries: SalaryItem[] }> = {}
+        salaryData?.forEach((r) => {
           const m = r.month
           if (!salaryByMonth[m]) {
-            salaryByMonth[m] = {
-              designers_count: 0,
-              interns_count: 0,
-              advisors_count: 0,
-              salaries: [],
-            }
+            salaryByMonth[m] = { designers_count: 0, interns_count: 0, advisors_count: 0, salaries: [] }
           }
+
           const rank = (r.rank || '').toLowerCase()
           if (/디자이너|실장|부원장|대표원장|대표/.test(rank)) salaryByMonth[m].designers_count++
           else if (/인턴/.test(rank)) salaryByMonth[m].interns_count++
           else if (/바이저|매니저/.test(rank)) salaryByMonth[m].advisors_count++
+
           salaryByMonth[m].salaries.push({
             name: r.name,
             rank: r.rank,
@@ -143,7 +134,10 @@ export default function GPTSalonAnalysisPage() {
           ...b,
           fixed_expense: expMap[b.month]?.fixed_expense || 0,
           variable_expense: expMap[b.month]?.variable_expense || 0,
-          ...salaryByMonth[b.month],
+          designers_count: salaryByMonth[b.month]?.designers_count || 0,
+          interns_count: salaryByMonth[b.month]?.interns_count || 0,
+          advisors_count: salaryByMonth[b.month]?.advisors_count || 0,
+          salaries: salaryByMonth[b.month]?.salaries || [],
         }))
 
         setMonthBlocks(merged)
@@ -155,10 +149,10 @@ export default function GPTSalonAnalysisPage() {
       }
     }
 
-    fetchData()
+    fetchAll()
   }, [branch, startMonth, endMonth])
 
-  // ───────── 사업자 유입 / 잔액 ─────────
+  // ───────── 사업자 유입 / 통장잔액 ─────────
   useEffect(() => {
     const fetchFinance = async () => {
       if (!branch || !startMonth || !endMonth) return
@@ -190,7 +184,7 @@ export default function GPTSalonAnalysisPage() {
     fetchFinance()
   }, [branch, startMonth, endMonth])
 
-  // ✅ 펼치기 토글 함수
+  // ✅ 펼치기 토글
   const toggleMonth = (m: string) => {
     setOpenMonths((prev) => ({ ...prev, [m]: !prev[m] }))
   }
@@ -223,7 +217,7 @@ export default function GPTSalonAnalysisPage() {
       {loading && <p className="text-blue-500 animate-pulse">📡 데이터 불러오는 중...</p>}
       {error && <p className="text-red-500">{error}</p>}
 
-      {/* ───────── 월별 상세 ───────── */}
+      {/* ───────── 월별 상세 (펼치기 가능) ───────── */}
       {monthBlocks.map((b, i) => (
         <section key={i} className="border rounded-lg bg-gray-50">
           <div
@@ -231,19 +225,16 @@ export default function GPTSalonAnalysisPage() {
             onClick={() => toggleMonth(b.month)}
           >
             <h2 className="font-semibold text-lg">📆 {b.month}</h2>
-            <span className="text-sm text-gray-600">
-              {openMonths[b.month] ? '▲ 접기' : '▼ 펼치기'}
-            </span>
+            <span className="text-sm text-gray-600">{openMonths[b.month] ? '▲ 접기' : '▼ 펼치기'}</span>
           </div>
 
           {openMonths[b.month] && (
-            <div className="p-4 border-t space-y-3">
+            <div className="p-4 border-t space-y-4">
               <p className="text-sm">
-                👥 디자이너 {b.designers_count || 0}명 / 인턴 {b.interns_count || 0}명 / 바이저 {b.advisors_count || 0}명
+                👥 디자이너 {b.designers_count}명 / 인턴 {b.interns_count}명 / 바이저 {b.advisors_count}명
               </p>
 
-              {/* 급여 테이블 */}
-              {b.salaries?.length > 0 && (
+              {b.salaries.length > 0 && (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm border border-gray-300">
                     <thead className="bg-gray-100">
@@ -266,7 +257,6 @@ export default function GPTSalonAnalysisPage() {
                 </div>
               )}
 
-              {/* 매출 및 방문객 */}
               <div className="grid sm:grid-cols-2 gap-4">
                 <div className="p-3 border rounded bg-white">
                   <div className="text-gray-500 text-sm">총 매출</div>
@@ -282,7 +272,6 @@ export default function GPTSalonAnalysisPage() {
                 </div>
               </div>
 
-              {/* 정액권 */}
               <div className="grid sm:grid-cols-3 gap-4">
                 <div className="p-3 border rounded bg-white">
                   <div className="text-gray-500 text-sm">정액권 결제</div>
@@ -298,7 +287,6 @@ export default function GPTSalonAnalysisPage() {
                 </div>
               </div>
 
-              {/* 지출 */}
               <div className="grid sm:grid-cols-3 gap-4 text-sm">
                 <div className="p-3 border rounded bg-white">
                   <div className="text-gray-500">고정지출</div>
@@ -320,7 +308,7 @@ export default function GPTSalonAnalysisPage() {
         </section>
       ))}
 
-      {/* ───────── 기간 전체 요약 ───────── */}
+      {/* ───────── 전체 요약 ───────── */}
       <section className="border rounded-lg p-4 bg-gray-50 space-y-4">
         <h2 className="font-semibold text-lg">🏦 사업자 통장 / 지출 요약 (기간 전체)</h2>
         <div className="grid sm:grid-cols-2 gap-4">
