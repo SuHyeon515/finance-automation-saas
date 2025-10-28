@@ -8,6 +8,7 @@ const cards = [
   { href: '/rules',    title: '🏷️ 카테고리 관리',    desc: '수입/지출/자산 카테고리 관리' },
   { href: '/assets',        title: '💰 자산 관리',      desc: '부동 자산과 유동 자산 관리' },
   { href: '/salary', title: '💵 매장데이터 관리', desc: '매장 디자이너 및 인턴 수 방문객 데이터' },
+  { href: '/salon',      title: '💇‍♀️ 매출데이터 관리',        desc: '데이터 관리' },
   { href: '/reports',       title: '📊 리포트',          desc: '월/주/일/연 · 지점/카테고리별 집계' },
   { href: '/analysis',      title: '🤖 GPT 분석',        desc: '실현매출 중심 경영 인사이트 자동 생성' },
   { href: '/analyses',      title: '🤖 GPT 분석 저장',        desc: '실현매출 중심 경영 인사이트 자동 저장' },
