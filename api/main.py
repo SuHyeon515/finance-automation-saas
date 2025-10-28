@@ -38,15 +38,25 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 app = FastAPI()
 
-# === CORS 설정 (배포 + 로컬 완전 대응 버전) ===
+# ✅ CORS 완전 대응 버전
+allowed_origins = [
+    "https://finance-automation-saas-um91.vercel.app",
+    "https://finance-automation-saas.vercel.app",
+    "http://localhost:3000",
+    "https://finance-automation-saas.onrender.com"
+]
+
+# 환경변수 ALLOWED_ORIGINS도 병합 (콤마 구분 지원)
+env_origins = os.getenv("ALLOWED_ORIGINS", "")
+if env_origins:
+    allowed_origins.extend([o.strip() for o in env_origins.split(",") if o.strip()])
+
+# ✅ 중복 제거
+allowed_origins = list(set(allowed_origins))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://finance-automation-saas-um91.vercel.app",  # ✅ 실제 운영 프론트 (배포용)
-        "https://finance-automation-saas.vercel.app",       # ✅ 예비 도메인 (리디렉션 등)
-        "http://localhost:3000",                            # ✅ 로컬 개발 환경
-        "https://finance-automation-saas.onrender.com"      # ✅ 백엔드 자기 자신 (내부 요청용)
-    ],
+    allow_origins=allowed_origins,       # ← 리스트로 정확히 전달
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1096,29 +1106,50 @@ async def delete_asset_log(
 
 # ✅ 자동 급여 불러오기 API
 @app.get("/transactions/salary_auto_load")
-def salary_auto_load(branch: str = Query(...), start: str = Query(...), end: str = Query(...)):
+async def salary_auto_load(
+    branch: str = Query(...),
+    start: str = Query(...),
+    end: str = Query(...),
+    authorization: Optional[str] = Header(None)
+):
     """
     지정된 지점(branch)과 기간(start~end)에 해당하는
     '월급', '지원비', '배당' 등의 카테고리 거래내역을 자동으로 추출
     """
+    user_id = await get_user_id(authorization)
 
-    # 예시: DB 조회 (PostgreSQL / Supabase 등)
     try:
-        # 실제 DB 쿼리 예시
-        query = f"""
-        SELECT category, amount, to_char(tx_date, 'YYYY-MM') AS month
-        FROM transactions
-        WHERE branch = '{branch}'
-          AND to_char(tx_date, 'YYYY-MM') BETWEEN '{start}' AND '{end}'
-          AND category ILIKE ANY(ARRAY['%월급%', '%지원비%', '%배당%']);
-        """
-        df = pd.read_sql(query, conn)  # conn은 DB 연결 객체
-        results = df.to_dict(orient="records")
-        return results
+        # Supabase에서 해당 범위 내 데이터 조회
+        res = (
+            supabase.table("transactions")
+            .select("category, amount, tx_date")
+            .eq("user_id", user_id)
+            .eq("branch", branch)
+            .gte("tx_date", f"{start}-01")
+            .lte("tx_date", pd.Period(end).end_time.strftime("%Y-%m-%d"))
+            .execute()
+        )
+
+        rows = res.data or []
+
+        # '월급', '지원비', '배당' 포함된 항목만 필터
+        filtered = [
+            {
+                "category": r["category"],
+                "amount": r["amount"],
+                "month": pd.to_datetime(r["tx_date"]).strftime("%Y-%m"),
+            }
+            for r in rows
+            if any(kw in (r.get("category") or "") for kw in ["월급", "지원비", "배당"])
+        ]
+
+        print(f"✅ [salary_auto_load] branch={branch}, 기간={start}~{end}, 건수={len(filtered)}")
+        return filtered
 
     except Exception as e:
         print("❌ 자동 급여 불러오기 오류:", e)
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
+        
     
 # === 유동자산 자동등록 로그 조회 ===
 @app.get("/assets_log/liquid")
