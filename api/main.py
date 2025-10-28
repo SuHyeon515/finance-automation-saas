@@ -2216,7 +2216,6 @@ async def income_filtered(
     'transactions' 테이블에서 수입(+) 중
     '내수금', '기타수입' 카테고리를 제외한 금액의 합계를 계산.
     """
-
     user_id = await get_user_id(authorization)
     branch = body.get("branch")
     start_month = body.get("start_month")
@@ -2226,33 +2225,53 @@ async def income_filtered(
         raise HTTPException(status_code=400, detail="branch, start_month, end_month 필수")
 
     try:
-        # ✅ Supabase에서 거래내역 조회
-        res = (
-            supabase.table("transactions")
-            .select("amount, category")
-            .eq("user_id", user_id)
-            .eq("branch", branch)
-            .gte("tx_date", f"{start_month}-01")
-            .lte("tx_date", f"{end_month}-31")
-            .execute()
-        )
+        # ✅ tx_date 컬럼이 없을 경우 대비 (date 컬럼로 fallback)
+        try:
+            res = (
+                supabase.table("transactions")
+                .select("amount, category, tx_date")
+                .eq("user_id", user_id)
+                .eq("branch", branch)
+                .gte("tx_date", f"{start_month}-01")
+                .lte("tx_date", f"{end_month}-31")
+                .execute()
+            )
+            rows = res.data or []
+        except Exception:
+            res = (
+                supabase.table("transactions")
+                .select("amount, category, date")
+                .eq("user_id", user_id)
+                .eq("branch", branch)
+                .gte("date", f"{start_month}-01")
+                .lte("date", f"{end_month}-31")
+                .execute()
+            )
+            rows = res.data or []
 
-        rows = res.data or []
+        print(f"📦 [income-filtered] 총 {len(rows)}건 조회됨 (branch={branch})")
 
-        # ✅ 수입(+) 중 '내수금', '기타수입' 제외
-        filtered = [
-            x for x in rows
-            if x.get("amount", 0) > 0 and not any(c in (x.get("category") or "") for c in ["내수금", "기타수입"])
-        ]
+        if not rows:
+            return {"bank_inflow": 0}
 
-        bank_inflow = sum(float(x.get("amount", 0)) for x in filtered)
+        # ✅ 필터링 로직: 수입(+) 중 내수금/기타수입 제외
+        filtered = []
+        for r in rows:
+            amount = float(r.get("amount", 0) or 0)
+            category = str(r.get("category") or "")
+            if amount > 0 and not any(ex in category for ex in ["내수금", "기타수입"]):
+                filtered.append(amount)
 
-        print(f"✅ [income-filtered] {branch} 유입합계 = {bank_inflow:,}원 (제외된 항목: 내수금/기타수입)")
+        bank_inflow = sum(filtered)
+        print(f"✅ [income-filtered] 계산결과: {bank_inflow:,}원 (제외된 항목: 내수금/기타수입)")
+
         return {"bank_inflow": bank_inflow}
 
     except Exception as e:
+        import traceback
         print("❌ income-filtered 오류:", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"income-filtered 내부 오류: {e}")
 
 @app.get("/analyses")
 async def list_analyses(authorization: Optional[str] = Header(None)):
