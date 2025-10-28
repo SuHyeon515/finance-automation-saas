@@ -1112,63 +1112,52 @@ async def salary_auto_load(
     end: str = Query(...),
     authorization: Optional[str] = Header(None)
 ):
-    """
-    지정된 지점(branch)과 기간(start~end)에 해당하는 거래내역에서
-    '월급', '배당', '지원비'를 찾아 이름/금액 자동 매핑.
-    """
     user_id = await get_user_id(authorization)
 
     try:
+        # ✅ 안전하게 데이터 조회 (branch 이름 유사검색 + 유저 필터)
         res = (
             supabase.table("transactions")
             .select("category, amount, tx_date, description")
             .eq("user_id", user_id)
-            .eq("branch", branch)
+            .ilike("branch", f"%{branch}%")   # ← 부분 일치 허용
             .gte("tx_date", f"{start}-01")
             .lte("tx_date", pd.Period(end).end_time.strftime("%Y-%m-%d"))
             .execute()
         )
-
         rows = res.data or []
+        print(f"📦 [DEBUG] salary_auto_load rows 샘플 ({branch})", rows[:5])
+
         if not rows:
+            print("⚠️ 불러올 거래내역 없음")
             return []
 
         df = pd.DataFrame(rows)
         df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
         df["month"] = pd.to_datetime(df["tx_date"]).dt.strftime("%Y-%m")
 
-        # ✅ 이름: description에서 숫자·공백 제거, 이름 부분만 추출
-        df["name"] = df["description"].fillna("").str.replace(r"[^가-힣a-zA-Z\s]", "", regex=True).str.strip()
-        df.loc[df["name"] == "", "name"] = "이름없음"
+        # ✅ 이름 = description
+        df["name"] = df["description"].fillna("기타").astype(str).str.strip()
 
         # ✅ base / extra 분리
-        df["base"] = 0
-        df["extra"] = 0
+        df["base"] = np.where(df["category"].str.contains("월급", na=False), df["amount"], 0)
+        df["extra"] = np.where(df["category"].str.contains("배당|지원비", na=False), df["amount"], 0)
 
-        # 월급류
-        df.loc[df["category"].str.contains("월급", na=False), "base"] = df["amount"]
+        grouped = df.groupby(["name", "month"], as_index=False)[["base", "extra"]].sum()
 
-        # 배당 및 지원비류
-        df.loc[df["category"].str.contains("배당|지원비", na=False), "extra"] = df["amount"]
-
-        # ✅ 같은 사람 + 같은 달 기준으로 합산
-        grouped = (
-            df.groupby(["name", "month"], as_index=False)
-            .agg({"base": "sum", "extra": "sum"})
-        )
-
-        results = []
-        for _, r in grouped.iterrows():
-            results.append({
+        results = [
+            {
                 "name": r["name"],
-                "rank": "디자이너",  # 기본값
-                "base": abs(float(r["base"] or 0)),
-                "extra": abs(float(r["extra"] or 0)),
+                "rank": "디자이너",
+                "base": abs(float(r["base"])),
+                "extra": abs(float(r["extra"])),
                 "sales": 0,
-                "month": r["month"]
-            })
+                "month": r["month"],
+            }
+            for _, r in grouped.iterrows()
+        ]
 
-        print(f"✅ [salary_auto_load] {branch} {start}~{end}: {len(results)}명")
+        print(f"✅ [salary_auto_load] 결과 {len(results)}건")
         return results
 
     except Exception as e:
