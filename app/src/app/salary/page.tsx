@@ -103,7 +103,7 @@ export default function ManualSalaryPage() {
         name: r.name || '이름없음',
         rank: r.rank || '디자이너',
         base: Number(r.base || 0),
-        extra: Number(r.extra || 0),
+        extra: 0, // ✅ 월급만이므로 항상 0
         sales: Number(r.sales || 0),
         month: r.month || new Date().toISOString().slice(0, 7),
       }))

@@ -1114,12 +1114,12 @@ async def salary_auto_load(
 ):
     """
     지정된 지점(branch)과 기간(start~end)에 해당하는 거래내역 중
-    '월급', '배당' 키워드를 가진 거래만 불러와서 자동 매핑.
+    '월급' 키워드를 가진 거래만 불러와 자동 매핑.
     """
     user_id = await get_user_id(authorization)
 
     try:
-        # ✅ 1. Supabase 쿼리 (월급·배당 카테고리만)
+        # ✅ 1. Supabase 쿼리 (월급만 필터)
         res = (
             supabase.table("transactions")
             .select("category, amount, tx_date, description")
@@ -1127,35 +1127,34 @@ async def salary_auto_load(
             .ilike("branch", f"%{branch}%")
             .gte("tx_date", f"{start}-01")
             .lte("tx_date", pd.Period(end).end_time.strftime("%Y-%m-%d"))
-            .or_(
-                "category.ilike.%월급%,"
-                "category.ilike.%배당%,"
-            )
+            .ilike("category", "%월급%")  # ✅ 배당 제거 → 월급만 필터
             .execute()
         )
 
         rows = res.data or []
-        print(f"📦 [DEBUG] 필터된 rows ({branch}):", rows[:5])
+        print(f"📦 [DEBUG] 월급만 필터된 rows ({branch}):", rows[:5])
 
         if not rows:
-            print("⚠️ 월급/배당 관련 거래 없음")
+            print("⚠️ 월급 관련 거래 없음")
             return []
 
+        # ✅ 2. DataFrame 변환
         df = pd.DataFrame(rows)
         df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
         df["month"] = pd.to_datetime(df["tx_date"]).dt.strftime("%Y-%m")
 
-        # ✅ 이름: description 그대로 사용 (이름 없는 건 '기타')
+        # ✅ 3. 이름: description 그대로 사용 (비어있으면 '기타')
         df["name"] = df["description"].fillna("기타").astype(str).str.strip()
 
-        # ✅ 금액 분리
-        df["base"] = np.where(df["category"].str.contains("월급", na=False), df["amount"], 0)
-        df["extra"] = np.where(df["category"].str.contains("배당", na=False), df["amount"], 0)
+        # ✅ 4. base만 계산 (extra 없음)
+        df["base"] = df["amount"]
+        df["extra"] = 0  # ✅ 배당 제거
+        df["sales"] = 0
 
-        # ✅ 합산
+        # ✅ 5. 같은 사람 + 같은 달 합산
         grouped = (
             df.groupby(["name", "month"], as_index=False)
-            .agg({"base": "sum", "extra": "sum"})
+            .agg({"base": "sum"})
         )
 
         results = [
@@ -1163,14 +1162,14 @@ async def salary_auto_load(
                 "name": r["name"],
                 "rank": "디자이너",
                 "base": abs(float(r["base"])),
-                "extra": abs(float(r["extra"])),
+                "extra": 0,     # ✅ 항상 0
                 "sales": 0,
                 "month": r["month"],
             }
             for _, r in grouped.iterrows()
         ]
 
-        print(f"✅ [salary_auto_load] 결과 {len(results)}건 (필터 적용됨)")
+        print(f"✅ [salary_auto_load] 결과 {len(results)}건 (월급만)")
         return results
 
     except Exception as e:
