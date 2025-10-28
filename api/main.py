@@ -1113,17 +1113,17 @@ async def salary_auto_load(
     authorization: Optional[str] = Header(None)
 ):
     """
-    지정된 지점(branch)과 기간(start~end)에 해당하는
-    '월급', '지원비', '배당' 등의 카테고리 거래내역을 자동으로 추출.
-    이름(name)은 거래 내용(description)을 그대로 사용.
+    자동 급여 불러오기:
+    - 이름(name): 거래내용(description)
+    - 월급/배당/지원비 구분하여 base, extra 금액 분리
+    - 동일인(name+month)은 자동 합산
     """
     user_id = await get_user_id(authorization)
 
     try:
-        # 🔹 거래내역 조회
         res = (
             supabase.table("transactions")
-            .select("category, amount, tx_date, description, memo")
+            .select("category, amount, tx_date, description")
             .eq("user_id", user_id)
             .eq("branch", branch)
             .gte("tx_date", f"{start}-01")
@@ -1131,27 +1131,37 @@ async def salary_auto_load(
             .execute()
         )
         rows = res.data or []
+        if not rows:
+            return []
 
-        # 🔹 월급 / 지원비 / 배당 관련만 필터링
-        filtered = []
-        for r in rows:
-            cat = (r.get("category") or "").strip()
-            if not any(kw in cat for kw in ["월급", "지원비", "배당"]):
-                continue
+        df = pd.DataFrame(rows)
+        df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
+        df["month"] = pd.to_datetime(df["tx_date"]).dt.strftime("%Y-%m")
+        df["name"] = df["description"].fillna("이름없음")
 
-            desc = (r.get("description") or "").strip()  # ✅ 여기서 이름 사용
-            amt = abs(float(r.get("amount") or 0))
-            month_str = pd.to_datetime(r["tx_date"]).strftime("%Y-%m")
+        # ✅ 카테고리 기준으로 분리
+        df["base"] = np.where(df["category"].str.contains("월급", na=False), df["amount"], 0)
+        df["extra"] = np.where(df["category"].str.contains("배당|지원비", na=False), df["amount"], 0)
 
-            filtered.append({
-                "name": desc,          # ✅ 이름 = 거래 내용(description)
-                "category": cat,
-                "amount": amt,
-                "month": month_str,
+        # ✅ 같은 사람 + 같은 월 기준으로 묶기
+        grouped = (
+            df.groupby(["name", "month"], as_index=False)
+            .agg({"base": "sum", "extra": "sum"})
+        )
+
+        results = []
+        for _, r in grouped.iterrows():
+            results.append({
+                "name": r["name"],
+                "rank": "디자이너",  # 기본값
+                "base": abs(float(r["base"] or 0)),
+                "extra": abs(float(r["extra"] or 0)),
+                "sales": 0,
+                "month": r["month"]
             })
 
-        print(f"✅ [salary_auto_load] branch={branch}, 기간={start}~{end}, 추출={len(filtered)}건")
-        return filtered
+        print(f"✅ [salary_auto_load] {len(results)}명 불러옴 ({branch}, {start}~{end})")
+        return results
 
     except Exception as e:
         print("❌ 자동 급여 불러오기 오류:", e)
