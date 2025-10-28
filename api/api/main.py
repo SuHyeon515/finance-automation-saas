@@ -1094,7 +1094,32 @@ async def delete_asset_log(
     supabase.table("assets_log").delete().eq("id", id).eq("user_id", user_id).execute()
     return {"ok": True}
 
+# ✅ 자동 급여 불러오기 API
+@app.get("/transactions/salary_auto_load")
+def salary_auto_load(branch: str = Query(...), start: str = Query(...), end: str = Query(...)):
+    """
+    지정된 지점(branch)과 기간(start~end)에 해당하는
+    '월급', '지원비', '배당' 등의 카테고리 거래내역을 자동으로 추출
+    """
 
+    # 예시: DB 조회 (PostgreSQL / Supabase 등)
+    try:
+        # 실제 DB 쿼리 예시
+        query = f"""
+        SELECT category, amount, to_char(tx_date, 'YYYY-MM') AS month
+        FROM transactions
+        WHERE branch = '{branch}'
+          AND to_char(tx_date, 'YYYY-MM') BETWEEN '{start}' AND '{end}'
+          AND category ILIKE ANY(ARRAY['%월급%', '%지원비%', '%배당%']);
+        """
+        df = pd.read_sql(query, conn)  # conn은 DB 연결 객체
+        results = df.to_dict(orient="records")
+        return results
+
+    except Exception as e:
+        print("❌ 자동 급여 불러오기 오류:", e)
+        return {"error": str(e)}
+    
 # === 유동자산 자동등록 로그 조회 ===
 @app.get("/assets_log/liquid")
 async def get_liquid_assets(
