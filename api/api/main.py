@@ -6,6 +6,7 @@ import httpx
 import numpy as np
 import pandas as pd
 from datetime import datetime,timedelta
+from calendar import monthrange
 from dateutil.relativedelta import relativedelta
 from fastapi import FastAPI, UploadFile, File, Form, Header,APIRouter, HTTPException, Depends, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -2270,7 +2271,7 @@ async def income_filtered(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"income-filtered 내부 오류: {e}")
     
-    
+
 @app.get("/analyses")
 async def list_analyses(authorization: Optional[str] = Header(None)):
     """
