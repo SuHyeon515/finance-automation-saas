@@ -245,162 +245,180 @@ export default function ReportsPage() {
         >
           {[
             {
-                title: '📈 수입',
-                colorText: 'text-green-700',
-                rows: incomeRows,
-                chartData: mergeUnclassified(
-                  (data?.by_category?.income ?? []).map((v: any) => ({
-                    category: v.category || '미분류',
-                    amount: Math.abs(v.sum || 0),
-                  })),
-                  'category'
-                ),
-                tableColor: 'text-green-600',
-              },
-              {
-                title: '🏠 고정지출',
-                colorText: 'text-indigo-700',
-                rows: fixedRows,
-                chartData: mergeUnclassified(
-                  (data?.by_category?.fixed_expense ?? []).map((v: any) => ({
-                    category: v.category || '미분류',
-                    amount: Math.abs(v.sum || 0),
-                  })),
-                  'category'
-                ),
-                tableColor: 'text-indigo-600',
-              },
-              {
-                title: '🚗 변동지출',
-                colorText: 'text-orange-700',
-                rows: variableRows,
-                chartData: mergeUnclassified(
-                  (data?.by_category?.variable_expense ?? []).map((v: any) => ({
-                    category: v.category || '미분류',
-                    amount: Math.abs(v.sum || 0),
-                  })),
-                  'category'
-                ),
-                tableColor: 'text-orange-600',
-              },
-          ].map((blk, idx) => (
-            <section key={idx} className="bg-white border rounded-xl shadow-sm p-6 space-y-6">
-              <h2 className={`text-xl font-semibold ${blk.colorText}`}>{blk.title}</h2>
-
-              <div className="flex flex-col md:flex-row items-start gap-6">
-                <div className="flex-1">
-                  <ResponsiveContainer width="100%" height={300}>
-                    <PieChart>
-                      <Pie
-                        data={blk.chartData.map(d => ({ name: d.category, value: d.amount }))}
-                        dataKey="value"
-                        nameKey="name"
-                        outerRadius={100} // ✅ PDF 호환 안정화
-                        labelLine={false}
-                        label={({ cx, cy, midAngle, innerRadius, outerRadius, percent, name, index }) => {
-                          const RADIAN = Math.PI / 180
-                          const radius = innerRadius + (outerRadius - innerRadius) * 0.6
-                          const x = cx + radius * Math.cos(-midAngle * RADIAN)
-                          const y = cy + radius * Math.sin(-midAngle * RADIAN)
-                          const color = getTextColor(PIE_COLORS[index % PIE_COLORS.length])
-                          return (
-                            <text
-                              x={x}
-                              y={y}
-                              fill={color}
-                              textAnchor="middle"
-                              dominantBaseline="central"
-                              fontSize={12}
-                              fontWeight="600"
-                            >
-                              {`${name} ${(percent * 100).toFixed(0)}%`}
-                            </text>
-                          )
-                        }}
-                      >
-                        {blk.chartData.map((_: any, i: number) => (
-                          <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(v: number) => formatCurrency(v)} />
-                    </PieChart>
-                  </ResponsiveContainer>
+              title: '📈 수입',
+              colorText: 'text-green-700',
+              rows: incomeRows,
+              chartData: mergeUnclassified(
+                (data?.by_category?.income ?? []).map((v: any) => ({
+                  category: v.category || '미분류',
+                  amount: Math.abs(v.sum || 0),
+                })),
+                'category'
+              ),
+              tableColor: 'text-green-600',
+            },
+            {
+              title: '🏠 고정지출',
+              colorText: 'text-indigo-700',
+              rows: fixedRows,
+              chartData: mergeUnclassified(
+                (data?.by_category?.fixed_expense ?? []).map((v: any) => ({
+                  category: v.category || '미분류',
+                  amount: Math.abs(v.sum || 0),
+                })),
+                'category'
+              ),
+              tableColor: 'text-indigo-600',
+            },
+            {
+              title: '🚗 변동지출',
+              colorText: 'text-orange-700',
+              rows: variableRows,
+              chartData: mergeUnclassified(
+                (data?.by_category?.variable_expense ?? []).map((v: any) => ({
+                  category: v.category || '미분류',
+                  amount: Math.abs(v.sum || 0),
+                })),
+                'category'
+              ),
+              tableColor: 'text-orange-600',
+            },
+          ].map((blk, idx) => {
+            const [open, setOpen] = useState(true) // ✅ 표만 접기용 상태
+            return (
+              <section key={idx} className="bg-white border rounded-xl shadow-sm p-6 space-y-6">
+                <div className="flex justify-between items-center">
+                  <h2 className={`text-xl font-semibold ${blk.colorText}`}>{blk.title}</h2>
+                  <button
+                    onClick={() => setOpen(!open)}
+                    className="text-sm text-gray-500 hover:text-gray-800 border rounded px-3 py-1"
+                  >
+                    {open ? '▲ 표 접기' : '▼ 표 펼치기'}
+                  </button>
                 </div>
 
-                <div className="flex-1 overflow-x-auto">
-                  <table className="w-full text-sm border border-gray-200 rounded-lg">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="p-2 border">분류</th>
-                        <th className="p-2 border text-right">비율</th>
-                        <th className="p-2 border text-right">금액</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(() => {
-                        const total = blk.chartData.reduce((s: number, v: any) => s + v.amount, 0)
-                        return (
-                          <>
-                            {blk.chartData.map((r: any, i: number) => {
-                              const percent = total ? (r.amount / total) * 100 : 0
-                              return (
-                                <tr key={i}>
-                                  <td className="p-2 border text-gray-800">{r.category}</td>
-                                  <td className="p-2 border text-right text-gray-500">{percent.toFixed(2)}%</td>
-                                  <td className={`p-2 border text-right ${blk.tableColor}`}>
-                                    {formatCurrency(r.amount)}
-                                  </td>
-                                </tr>
-                              )
-                            })}
-                            <tr className="bg-gray-100 font-semibold">
-                              <td className="p-2 border text-gray-900">합계</td>
-                              <td className="p-2 border text-right text-gray-700">100.00%</td>
-                              <td className={`p-2 border text-right ${blk.tableColor}`}>
-                                {formatCurrency(total)}
-                              </td>
-                            </tr>
-                          </>
-                        )
-                      })()}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm border border-gray-200 rounded-lg">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="p-2 border">날짜</th>
-                      <th className="p-2 border">내용</th>
-                      <th className="p-2 border">카테고리</th>
-                      <th className="p-2 border text-right">금액</th>
-                      <th className="p-2 border">메모</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {blk.rows.length > 0 ? (
-                      blk.rows.map((r: any, i: number) => (
-                        <tr key={i}>
-                          <td className="p-2">{r.tx_date}</td>
-                          <td className="p-2">{r.description}</td>
-                          <td className="p-2">{r.category || '미분류'}</td>
-                          <td className={`p-2 text-right ${blk.tableColor}`}>
-                            {formatCurrency(Math.abs(r.amount))}
-                          </td>
-                          <td className="p-2 text-gray-600">{r.memo || '-'}</td>
+                {/* ✅ 파이차트 + 분류표는 항상 표시 */}
+                <div className="flex flex-col md:flex-row items-start gap-6">
+                  <div className="flex-1">
+                    <ResponsiveContainer width="100%" height={300}>
+                      <PieChart>
+                        <Pie
+                          data={blk.chartData.map(d => ({ name: d.category, value: d.amount }))}
+                          dataKey="value"
+                          nameKey="name"
+                          outerRadius={100}
+                          labelLine={false}
+                          label={({ cx, cy, midAngle, innerRadius, outerRadius, percent, name, index }) => {
+                            const RADIAN = Math.PI / 180
+                            const radius = innerRadius + (outerRadius - innerRadius) * 0.6
+                            const x = cx + radius * Math.cos(-midAngle * RADIAN)
+                            const y = cy + radius * Math.sin(-midAngle * RADIAN)
+                            const color = getTextColor(PIE_COLORS[index % PIE_COLORS.length])
+                            return (
+                              <text
+                                x={x}
+                                y={y}
+                                fill={color}
+                                textAnchor="middle"
+                                dominantBaseline="central"
+                                fontSize={12}
+                                fontWeight="600"
+                              >
+                                {`${name} ${(percent * 100).toFixed(0)}%`}
+                              </text>
+                            )
+                          }}
+                        >
+                          {blk.chartData.map((_: any, i: number) => (
+                            <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(v: number) => formatCurrency(v)} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="flex-1 overflow-x-auto">
+                    <table className="w-full text-sm border border-gray-200 rounded-lg">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="p-2 border">분류</th>
+                          <th className="p-2 border text-right">비율</th>
+                          <th className="p-2 border text-right">금액</th>
                         </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td colSpan={5} className="text-center text-gray-400 p-3">내역 없음</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          ))}
+                      </thead>
+                      <tbody>
+                        {(() => {
+                          const total = blk.chartData.reduce((s: number, v: any) => s + v.amount, 0)
+                          return (
+                            <>
+                              {blk.chartData.map((r: any, i: number) => {
+                                const percent = total ? (r.amount / total) * 100 : 0
+                                return (
+                                  <tr key={i}>
+                                    <td className="p-2 border text-gray-800">{r.category}</td>
+                                    <td className="p-2 border text-right text-gray-500">{percent.toFixed(2)}%</td>
+                                    <td className={`p-2 border text-right ${blk.tableColor}`}>
+                                      {formatCurrency(r.amount)}
+                                    </td>
+                                  </tr>
+                                )
+                              })}
+                              <tr className="bg-gray-100 font-semibold">
+                                <td className="p-2 border text-gray-900">합계</td>
+                                <td className="p-2 border text-right text-gray-700">100.00%</td>
+                                <td className={`p-2 border text-right ${blk.tableColor}`}>
+                                  {formatCurrency(total)}
+                                </td>
+                              </tr>
+                            </>
+                          )
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* ✅ 이 아래 표만 접힘 */}
+                {open && (
+                  <div className="overflow-x-auto transition-all duration-300">
+                    <table className="w-full text-sm border border-gray-200 rounded-lg mt-2">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="p-2 border">날짜</th>
+                          <th className="p-2 border">내용</th>
+                          <th className="p-2 border">카테고리</th>
+                          <th className="p-2 border text-right">금액</th>
+                          <th className="p-2 border">메모</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {blk.rows.length > 0 ? (
+                          blk.rows.map((r: any, i: number) => (
+                            <tr key={i}>
+                              <td className="p-2">{r.tx_date}</td>
+                              <td className="p-2">{r.description}</td>
+                              <td className="p-2">{r.category || '미분류'}</td>
+                              <td className={`p-2 text-right ${blk.tableColor}`}>
+                                {formatCurrency(Math.abs(r.amount))}
+                              </td>
+                              <td className="p-2 text-gray-600">{r.memo || '-'}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={5} className="text-center text-gray-400 p-3">
+                              내역 없음
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            )
+          })}
         </div>
       )}
     </main>
