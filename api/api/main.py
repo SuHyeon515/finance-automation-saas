@@ -1114,12 +1114,12 @@ async def salary_auto_load(
 ):
     """
     지정된 지점(branch)과 기간(start~end)에 해당하는 거래내역 중
-    '월급', '배당', '지원비' 키워드를 가진 거래만 불러와서 자동 매핑.
+    '월급', '배당' 키워드를 가진 거래만 불러와서 자동 매핑.
     """
     user_id = await get_user_id(authorization)
 
     try:
-        # ✅ 1. Supabase 쿼리 (월급·배당·지원비 카테고리만)
+        # ✅ 1. Supabase 쿼리 (월급·배당 카테고리만)
         res = (
             supabase.table("transactions")
             .select("category, amount, tx_date, description")
@@ -1130,7 +1130,6 @@ async def salary_auto_load(
             .or_(
                 "category.ilike.%월급%,"
                 "category.ilike.%배당%,"
-                "category.ilike.%지원비%"
             )
             .execute()
         )
@@ -1139,7 +1138,7 @@ async def salary_auto_load(
         print(f"📦 [DEBUG] 필터된 rows ({branch}):", rows[:5])
 
         if not rows:
-            print("⚠️ 월급/배당/지원비 관련 거래 없음")
+            print("⚠️ 월급/배당 관련 거래 없음")
             return []
 
         df = pd.DataFrame(rows)
@@ -1151,7 +1150,7 @@ async def salary_auto_load(
 
         # ✅ 금액 분리
         df["base"] = np.where(df["category"].str.contains("월급", na=False), df["amount"], 0)
-        df["extra"] = np.where(df["category"].str.contains("배당|지원비", na=False), df["amount"], 0)
+        df["extra"] = np.where(df["category"].str.contains("배당", na=False), df["amount"], 0)
 
         # ✅ 합산
         grouped = (
