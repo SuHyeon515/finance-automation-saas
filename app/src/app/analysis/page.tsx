@@ -182,9 +182,10 @@ export default function GPTSalonAnalysisPage() {
       const grouped = (data || []).reduce((acc: any, cur: any) => {
         const { month, rank } = cur
         if (!acc[month]) acc[month] = { designers: 0, interns: 0, advisors: 0 }
-        if (/디자이너|실장|부원장/i.test(rank)) acc[month].designers++
-        else if (/인턴/i.test(rank)) acc[month].interns++
-        else if (/바이저|매니저/i.test(rank)) acc[month].advisors++
+        const rankStr = (rank || "").toLowerCase()
+        if (/디자이너|실장|부원장|대표/.test(rankStr)) acc[month].designers++
+        else if (/인턴/.test(rankStr)) acc[month].interns++
+        else if (/바이저|매니저/.test(rankStr)) acc[month].advisors++
         return acc
       }, {})
 
