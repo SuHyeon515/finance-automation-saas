@@ -1112,38 +1112,52 @@ async def salary_auto_load(
     end: str = Query(...),
     authorization: Optional[str] = Header(None)
 ):
+    """
+    지정된 지점(branch)과 기간(start~end)에 해당하는 거래내역 중
+    '월급', '배당', '지원비' 키워드를 가진 거래만 불러와서 자동 매핑.
+    """
     user_id = await get_user_id(authorization)
 
     try:
-        # ✅ 안전하게 데이터 조회 (branch 이름 유사검색 + 유저 필터)
+        # ✅ 1. Supabase 쿼리 (월급·배당·지원비 카테고리만)
         res = (
             supabase.table("transactions")
             .select("category, amount, tx_date, description")
             .eq("user_id", user_id)
-            .ilike("branch", f"%{branch}%")   # ← 부분 일치 허용
+            .ilike("branch", f"%{branch}%")
             .gte("tx_date", f"{start}-01")
             .lte("tx_date", pd.Period(end).end_time.strftime("%Y-%m-%d"))
+            .or_(
+                "category.ilike.%월급%,"
+                "category.ilike.%배당%,"
+                "category.ilike.%지원비%"
+            )
             .execute()
         )
+
         rows = res.data or []
-        print(f"📦 [DEBUG] salary_auto_load rows 샘플 ({branch})", rows[:5])
+        print(f"📦 [DEBUG] 필터된 rows ({branch}):", rows[:5])
 
         if not rows:
-            print("⚠️ 불러올 거래내역 없음")
+            print("⚠️ 월급/배당/지원비 관련 거래 없음")
             return []
 
         df = pd.DataFrame(rows)
         df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
         df["month"] = pd.to_datetime(df["tx_date"]).dt.strftime("%Y-%m")
 
-        # ✅ 이름 = description
+        # ✅ 이름: description 그대로 사용 (이름 없는 건 '기타')
         df["name"] = df["description"].fillna("기타").astype(str).str.strip()
 
-        # ✅ base / extra 분리
+        # ✅ 금액 분리
         df["base"] = np.where(df["category"].str.contains("월급", na=False), df["amount"], 0)
         df["extra"] = np.where(df["category"].str.contains("배당|지원비", na=False), df["amount"], 0)
 
-        grouped = df.groupby(["name", "month"], as_index=False)[["base", "extra"]].sum()
+        # ✅ 합산
+        grouped = (
+            df.groupby(["name", "month"], as_index=False)
+            .agg({"base": "sum", "extra": "sum"})
+        )
 
         results = [
             {
@@ -1157,7 +1171,7 @@ async def salary_auto_load(
             for _, r in grouped.iterrows()
         ]
 
-        print(f"✅ [salary_auto_load] 결과 {len(results)}건")
+        print(f"✅ [salary_auto_load] 결과 {len(results)}건 (필터 적용됨)")
         return results
 
     except Exception as e:
