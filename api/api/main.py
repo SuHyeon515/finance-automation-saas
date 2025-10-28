@@ -1562,40 +1562,55 @@ async def save_analyses_meta(
     return {"status": "ok", "saved": data}
 
 @app.post("/transactions/summary")
-async def get_tx_summary(payload: dict, authorization: Optional[str] = Header(None)):
+async def transaction_summary(
+    body: dict = Body(...),
+    authorization: Optional[str] = Header(None)
+):
     """
-    branch, start_month, end_month 를 받아서
-    해당 기간의 수입/지출 합계를 반환
+    선택된 지점(branch)과 기간(start_month~end_month)을 기준으로
+    월별 고정/변동지출 합계를 반환합니다.
     """
     user_id = await get_user_id(authorization)
+    branch = body.get("branch")
+    start = body.get("start_month")
+    end = body.get("end_month")
 
-    branch = payload.get("branch")
-    start_month = payload.get("start_month")
-    end_month = payload.get("end_month")
+    if not all([branch, start, end]):
+        raise HTTPException(status_code=400, detail="branch, start_month, end_month 필수")
 
-    # 시작/종료 날짜 계산
-    start_date = f"{start_month}-01"
-    end_date = pd.Period(end_month).end_time.strftime("%Y-%m-%d")
+    try:
+        res = (
+            supabase.table("transactions")
+            .select("tx_date, category, amount, is_fixed")
+            .eq("user_id", user_id)
+            .eq("branch", branch)
+            .gte("tx_date", f"{start}-01")
+            .lte("tx_date", pd.Period(end).end_time.strftime("%Y-%m-%d"))
+            .execute()
+        )
+        rows = res.data or []
+        if not rows:
+            return []
 
-    q = (
-        supabase.table("transactions")
-        .select("amount, category, tx_date")
-        .eq("user_id", user_id)
-        .eq("branch", branch)
-        .gte("tx_date", start_date)
-        .lte("tx_date", end_date)
-        .execute()
-    )
+        df = pd.DataFrame(rows)
+        df["month"] = pd.to_datetime(df["tx_date"]).dt.strftime("%Y-%m")
+        df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
 
-    txs = q.data or []
-    income_total = sum(float(r["amount"]) for r in txs if float(r["amount"]) > 0)
-    expense_total = abs(sum(float(r["amount"]) for r in txs if float(r["amount"]) < 0))
+        monthly_summary = (
+            df.groupby(["month"])
+            .apply(lambda x: pd.Series({
+                "fixed_expense": abs(x.loc[x["is_fixed"] == True, "amount"].sum()),
+                "variable_expense": abs(x.loc[x["is_fixed"] == False, "amount"].sum()),
+            }))
+            .reset_index()
+        )
 
-    return {
-        "income_total": income_total,
-        "expense_total": expense_total,
-        "count": len(txs)
-    }
+        return monthly_summary.to_dict(orient="records")
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"summary 계산 실패: {e}")
 
 @app.get("/meta/designers")
 async def get_designers(
@@ -2021,8 +2036,6 @@ async def salon_analysis(
 
 ⸻
     """
-
-    # 👉 기존 prompt 이어붙이기 (변경 없이 유지)
     prompt += f"""
 [Ⅱ. 매출 입력(숫자만)]
     • 총매출: {total_sales:,}
