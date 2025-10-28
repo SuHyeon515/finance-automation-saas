@@ -1857,7 +1857,7 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         print("⚠️ 통장 잔액 조회 실패:", e)
         raise HTTPException(status_code=500, detail=str(e))
     
-# === GPT 분석 (지출 자동 집계 + 완전 프롬프트 통합 버전) ===
+# === GPT 분석 (지출 자동 집계 + 인원 통계 + 사업자 유입 자동 포함) ===
 @app.post('/gpt/salon-analysis')
 async def salon_analysis(
     body: dict = Body(...),
@@ -1865,20 +1865,19 @@ async def salon_analysis(
 ):
     """
     GPT 재무 분석 + Supabase 자동 저장
-    (고정/변동지출 자동 집계 포함)
+    (고정/변동지출 + 인원통계 + 사업자유입 자동 포함)
     """
 
-    # === 필수 검사 ===
     if not openai_client:
         raise HTTPException(status_code=500, detail='OPENAI_API_KEY 미설정')
 
-    # === 기본 필드 추출 ===
+    # === 기본 필드 ===
     branch = body.get("branch")
     start_month = body.get("start_month")
     end_month = body.get("end_month")
     period_text = body.get("period_text", f"{start_month}~{end_month}")
 
-    # === 유효성 검사 ===
+    # === 입력 유효성 ===
     try:
         payload = SalonKPIInput(**body)
     except Exception as e:
@@ -1887,7 +1886,7 @@ async def salon_analysis(
     # === 사용자 인증 ===
     user_id = await get_user_id(authorization)
 
-    # === 1️⃣ 디자이너 급여 데이터 조회 ===
+    # === 1️⃣ 디자이너 급여 데이터 조회 + 월별 인원 통계 ===
     try:
         res = (
             supabase.table("designer_salaries")
@@ -1904,15 +1903,31 @@ async def salon_analysis(
         print("⚠️ 디자이너 급여 조회 실패:", e)
         designer_salaries = []
 
+    # === 인원 통계 (디자이너·인턴·바이저) ===
+    monthly_staff_stats = {}
+    try:
+        for row in designer_salaries:
+            month = row["month"]
+            rank = row.get("rank", "")
+            if month not in monthly_staff_stats:
+                monthly_staff_stats[month] = {"디자이너": 0, "인턴": 0, "바이저": 0}
+            if any(k in rank for k in ["디자이너", "실장", "부원장"]):
+                monthly_staff_stats[month]["디자이너"] += 1
+            elif "인턴" in rank:
+                monthly_staff_stats[month]["인턴"] += 1
+            elif any(k in rank for k in ["바이저", "매니저"]):
+                monthly_staff_stats[month]["바이저"] += 1
+    except Exception as e:
+        print("⚠️ 인원 통계 생성 실패:", e)
+
     designer_info = (
         ", ".join([
             f"{r['name']}({r.get('rank','직급미입력')}, {int(r['total_amount']):,}원)"
             for r in designer_salaries
-        ])
-        if designer_salaries else "해당 기간 디자이너 데이터 없음"
+        ]) if designer_salaries else "해당 기간 디자이너 데이터 없음"
     )
 
-    # === 2️⃣ 지출 자동 집계 (expenses 테이블에서 category별 합산) ===
+    # === 2️⃣ 지출 자동 집계 ===
     try:
         exp_res = (
             supabase.table("expenses")
@@ -1930,7 +1945,29 @@ async def salon_analysis(
         print("⚠️ 지출 자동 집계 실패:", e)
         fixed_expense = 0
         variable_expense = 0
-    # === (2.5) 사업자 통장 잔액 자동 조회 ===
+
+    # === 3️⃣ 사업자 유입 자동 계산 (내수금·기타 제외) ===
+    try:
+        inflow_res = (
+            supabase.table("transactions")
+            .select("amount, category")
+            .eq("user_id", user_id)
+            .eq("branch", branch)
+            .gte("tx_date", f"{start_month}-01")
+            .lte("tx_date", f"{end_month}-31")
+            .execute()
+        )
+        inflow_rows = inflow_res.data or []
+        bank_inflow = sum(
+            x["amount"]
+            for x in inflow_rows
+            if x["amount"] > 0 and not any(c in (x.get("category") or "") for c in ["내수금", "기타수입"])
+        )
+    except Exception as e:
+        print("⚠️ 사업자 유입 계산 실패:", e)
+        bank_inflow = 0
+
+    # === 4️⃣ 통장 잔액 자동 조회 ===
     try:
         bal_res = (
             supabase.table("transactions")
@@ -1946,50 +1983,52 @@ async def salon_analysis(
     except Exception as e:
         print("⚠️ 통장 잔액 조회 실패:", e)
         cash_balance = 0
-    # === 3️⃣ 매출 관련 데이터 (프론트 입력 or 합계) ===
-    total_sales = getattr(payload, "total_sales", 0)
-    card_sales = getattr(payload, "card_sales", 0)
-    pay_sales = getattr(payload, "pay_sales", 0)
-    cash_sales = getattr(payload, "cash_sales", 0)
-    account_sales = getattr(payload, "account_sales", 0)
-    pass_paid_total = getattr(payload, "pass_paid_total", 0)
-    pass_used_total = getattr(payload, "realized_from_pass", 0)
-    visitors_total = getattr(payload, "visitors_total", 0)
-    bank_inflow = getattr(payload, "bank_inflow", 0)
-    interns = getattr(payload, "interns", 0)
 
-    # === 4️⃣ GPT 프롬프트 구성 ===
+    # === 5️⃣ 프론트에서 전달된 값 ===
+    total_sales = getattr(payload, "total_sales", 0)
+    visitors_total = getattr(payload, "visitors_total", 0)
+    compare_sales = body.get("compare_sales", 0)
+    compare_visitors = body.get("compare_visitors", 0)
+    compare_price = body.get("compare_price", 0)
+    prev_reviews = body.get("prev_reviews", 0)
+    current_reviews = body.get("current_reviews", 0)
+
+    # === 6️⃣ GPT 프롬프트 구성 (기존 유지 + 확장 정보 추가) ===
+    staff_summary = "\n".join(
+        [f"  • {m}월 → 디자이너 {v['디자이너']}명 / 인턴 {v['인턴']}명 / 바이저 {v['바이저']}명"
+         for m, v in monthly_staff_stats.items()]
+    ) or "데이터 없음"
+
     prompt = f"""
-💈 프로디안 통합 재무·성장 리포트 프롬프트 (완전판)
+💈 프로디안 통합 재무·성장 리포트 프롬프트 (확장판)
 
 당신은 미용실 전문 재무 분석가이자 경영 컨설턴트 AI입니다.
-입력된 데이터를 기반으로 '{branch}'의
-실현매출 중심 손익분석 + 재무건전성 + 성장률 + 결제구조 + 배당금 제안 + 예측 시나리오를 통합 평가하십시오.
-모든 금액은 원(₩) 단위입니다.
-결과는 가독성 높은 리포트 형태로 정리하고,
-마지막에는 한 줄평으로 핵심 상태를 요약하십시오.
+'{branch}'의 {period_text} 기간 데이터를 기반으로
+손익분석, 수익률, 성장률, 인원 현황, 배당금 제안을 포함한 리포트를 작성하십시오.
 
 ⸻
 
 [Ⅰ. 지점 기본정보]
     • 지점명: {branch}
     • 분석기간: {start_month} ~ {end_month}
-    • 디자이너(이름/직급): {designer_info}
-    • 인턴 수: {interns}
-    • 매장 형태: 시술 + 클리닉
+    • 디자이너/인턴 급여 데이터: {designer_info}
+    • 인원현황:
+{staff_summary}
+    • 방문객 수(기간): {visitors_total:,}명
+    • 비교기간 매출: {compare_sales:,} / 방문객: {compare_visitors:,} / 객단가: {compare_price:,}
+    • 리뷰(전월→이번): {prev_reviews} → {current_reviews}
 
 ⸻
+    """
 
+    # 👉 기존 prompt 이어붙이기 (변경 없이 유지)
+    prompt += f"""
 [Ⅱ. 매출 입력(숫자만)]
-    • 총매출(기간 합계): {total_sales:,}
-    • 카드매출: {card_sales:,}
-    • 페이매출: {pay_sales:,}
-    • 현금매출: {cash_sales:,}
-    • 계좌이체매출: {account_sales:,}
-    • 정액권 결제총액(선결제): {pass_paid_total:,}
-    • 정액권 차감총액(실사용): {pass_used_total:,}
-    • 방문고객(기간 합계): {visitors_total:,}
-    • 사업자 통장 유입총액(기간 합계): {bank_inflow:,}
+    • 총매출: {total_sales:,}
+    • 사업자 통장 유입총액(자동 계산): {bank_inflow:,}
+    • 고정지출: {fixed_expense:,}
+    • 변동지출: {variable_expense:,}
+    • 통장잔액: {cash_balance:,}
 
 ⸻
 
@@ -2148,7 +2187,7 @@ D: 부채>40% or 현금<40%
             'title': title,
             'params': payload.model_dump(),
             'result': analysis_text,
-            'created_at': datetime.now(timezone.utc).isoformat()  # ✅ 추가
+            'created_at': datetime.now(timezone.utc).isoformat()
         }).execute()
         analysis_id = ins.data[0]['id'] if ins.data else None
     except Exception as e:
@@ -2161,8 +2200,11 @@ D: 부채>40% or 현금<40%
         "title": title,
         "fixed_expense": fixed_expense,
         "variable_expense": variable_expense,
+        "bank_inflow": bank_inflow,
+        "staff_summary": monthly_staff_stats,
         "designers_used": designer_salaries
     }
+
 
 @app.get("/analyses")
 async def list_analyses(authorization: Optional[str] = Header(None)):
