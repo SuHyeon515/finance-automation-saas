@@ -1115,12 +1115,11 @@ async def salary_auto_load(
     """
     지정된 지점(branch)과 기간(start~end)에 해당하는
     '월급', '지원비', '배당' 등의 카테고리 거래내역을 자동으로 추출.
-    이름(name)은 거래 description 필드 그대로 사용.
+    이름(name)은 memo → description 순서로 가져옴.
     """
     user_id = await get_user_id(authorization)
 
     try:
-        # 🔹 거래내역 조회
         res = (
             supabase.table("transactions")
             .select("category, amount, tx_date, description, memo")
@@ -1132,7 +1131,6 @@ async def salary_auto_load(
         )
         rows = res.data or []
 
-        # 🔹 월급 / 지원비 / 배당 관련만 필터링
         filtered = []
         for r in rows:
             cat = (r.get("category") or "").strip()
@@ -1140,11 +1138,15 @@ async def salary_auto_load(
                 continue
 
             desc = (r.get("description") or "").strip()
+            memo = (r.get("memo") or "").strip()
             amt = abs(float(r.get("amount") or 0))
             month_str = pd.to_datetime(r["tx_date"]).strftime("%Y-%m")
 
+            # ✅ 이름은 memo → description 순서로 선택
+            name = memo or desc or "이름없음"
+
             filtered.append({
-                "name": desc,          # ✅ description 그대로 이름 칸에 넣기
+                "name": name,
                 "category": cat,
                 "amount": amt,
                 "month": month_str,
