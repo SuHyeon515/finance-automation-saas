@@ -2205,6 +2205,54 @@ D: 부채>40% or 현금<40%
         "designers_used": designer_salaries
     }
 
+# ✅ 사업자 유입총액 계산 API (내수금, 기타수입 제외)
+@app.post('/transactions/income-filtered')
+async def income_filtered(
+    body: dict = Body(...),
+    authorization: Optional[str] = Header(None)
+):
+    """
+    선택된 지점(branch), 시작월(start_month), 종료월(end_month)을 기준으로
+    'transactions' 테이블에서 수입(+) 중
+    '내수금', '기타수입' 카테고리를 제외한 금액의 합계를 계산.
+    """
+
+    user_id = await get_user_id(authorization)
+    branch = body.get("branch")
+    start_month = body.get("start_month")
+    end_month = body.get("end_month")
+
+    if not all([branch, start_month, end_month]):
+        raise HTTPException(status_code=400, detail="branch, start_month, end_month 필수")
+
+    try:
+        # ✅ Supabase에서 거래내역 조회
+        res = (
+            supabase.table("transactions")
+            .select("amount, category")
+            .eq("user_id", user_id)
+            .eq("branch", branch)
+            .gte("tx_date", f"{start_month}-01")
+            .lte("tx_date", f"{end_month}-31")
+            .execute()
+        )
+
+        rows = res.data or []
+
+        # ✅ 수입(+) 중 '내수금', '기타수입' 제외
+        filtered = [
+            x for x in rows
+            if x.get("amount", 0) > 0 and not any(c in (x.get("category") or "") for c in ["내수금", "기타수입"])
+        ]
+
+        bank_inflow = sum(float(x.get("amount", 0)) for x in filtered)
+
+        print(f"✅ [income-filtered] {branch} 유입합계 = {bank_inflow:,}원 (제외된 항목: 내수금/기타수입)")
+        return {"bank_inflow": bank_inflow}
+
+    except Exception as e:
+        print("❌ income-filtered 오류:", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/analyses")
 async def list_analyses(authorization: Optional[str] = Header(None)):
