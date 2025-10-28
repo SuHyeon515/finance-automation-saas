@@ -24,7 +24,11 @@ export default function ManualSalaryPage() {
   const [rows, setRows] = useState<DesignerInput[]>([])
   const [loading, setLoading] = useState(false)
 
-  // ✅ 조회용 상태
+  // ✅ 인건비 입력용 기간 상태
+  const [startMonth, setStartMonth] = useState('')
+  const [endMonth, setEndMonth] = useState('')
+
+  // ✅ 조회용 상태 (하단 테이블)
   const [listStartMonth, setListStartMonth] = useState('')
   const [listEndMonth, setListEndMonth] = useState('')
   const [listRows, setListRows] = useState<any[]>([])
@@ -78,24 +82,24 @@ export default function ManualSalaryPage() {
   const totalSalary = (r: DesignerInput) => r.base + (r.extra || 0)
   const totalAll = useMemo(() => rows.reduce((sum, r) => sum + totalSalary(r), 0), [rows])
 
-  // ✅ 자동 불러오기 (옵션1)
+  // ✅ 자동 불러오기
   const handleAutoLoad = async () => {
-    if (!branch || !listStartMonth || !listEndMonth)
+    if (!branch || !startMonth || !endMonth)
       return alert('지점과 기간을 모두 선택하세요.')
 
     setListLoading(true)
     try {
       const headers = await apiAuthHeader()
       const res = await fetch(
-        `${API_BASE}/transactions/salary_auto_load?branch=${encodeURIComponent(branch)}&start=${listStartMonth}&end=${listEndMonth}`,
+        `${API_BASE}/transactions/salary_auto_load?branch=${encodeURIComponent(branch)}&start=${startMonth}&end=${endMonth}`,
         { headers, credentials: 'include' }
       )
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
-      if (!Array.isArray(data)) return alert('조회된 데이터가 없습니다.')
+      if (!Array.isArray(data) || data.length === 0)
+        return alert('해당 기간에 불러올 데이터가 없습니다.')
 
-      // ✅ 카테고리 자동 분류
       const mapped = data.map((r: any) => {
         const isSalary = /월급/i.test(r.category || '')
         return {
@@ -104,7 +108,7 @@ export default function ManualSalaryPage() {
           base: isSalary ? Number(r.amount || 0) : 0,
           extra: !isSalary ? Number(r.amount || 0) : 0,
           sales: 0,
-          month: r.month || new Date().toISOString().slice(0, 7),
+          month: r.month || startMonth,
         }
       })
 
@@ -154,7 +158,7 @@ export default function ManualSalaryPage() {
     }
   }
 
-  // ✅ 조회 (기존)
+  // ✅ 조회
   const handleFetchList = async () => {
     if (!branch || !listStartMonth || !listEndMonth)
       return alert('지점과 조회 기간을 선택하세요.')
@@ -176,12 +180,13 @@ export default function ManualSalaryPage() {
     }
   }
 
+  // ✅ 합계
   const listTotal = useMemo(
     () => listRows.reduce((sum, r) => sum + (Number(r.total_amount) || Number(r.amount) || 0), 0),
     [listRows]
   )
 
-  // ✅ 삭제 (조회 테이블용)
+  // ✅ 삭제
   const handleDeleteRow = async (row: any) => {
     if (!confirm(`${row.name} (${row.month}) 급여 데이터를 삭제하시겠습니까?`)) return
     try {
@@ -195,22 +200,20 @@ export default function ManualSalaryPage() {
       if (res.ok) {
         alert('🗑️ 삭제 완료')
         setListRows(prev => prev.filter(r => !(r.name === row.name && r.month === row.month)))
-      } else {
-        alert('❌ 삭제 실패')
-      }
+      } else alert('❌ 삭제 실패')
     } catch (err) {
       console.error(err)
       alert('❌ 서버 오류')
     }
   }
 
-  // ✅ 전체 UI
+  // ✅ UI
   return (
     <main className="p-6 max-w-5xl mx-auto space-y-10">
-      <h1 className="text-2xl font-bold mb-2">💵 인건비 직접입력 + 자동 불러오기</h1>
+      <h1 className="text-2xl font-bold mb-2">💵 인건비 입력 + 자동 불러오기</h1>
 
       {/* 지점 선택 */}
-      <section className="border rounded-lg p-4 space-y-2 bg-gray-50">
+      <section className="border rounded-lg p-4 bg-gray-50 space-y-4">
         <label className="block text-sm font-medium">🏢 지점 선택</label>
         <select
           value={branch}
@@ -227,16 +230,41 @@ export default function ManualSalaryPage() {
       {/* 인건비 입력 */}
       {branch && (
         <section className="border rounded-lg p-4 bg-white space-y-4">
-          <div className="flex justify-between items-center">
-            <h2 className="font-semibold text-lg">👤 인건비 입력</h2>
-            <div className="flex gap-2">
-              <button onClick={addRow} className="bg-blue-600 text-white px-3 py-1 rounded">
-                + 행 추가
-              </button>
-              <button onClick={handleAutoLoad} disabled={listLoading} className="bg-purple-600 text-white px-3 py-1 rounded">
+          {/* 필터 + 버튼 */}
+          <div className="flex flex-wrap gap-3 items-end justify-between">
+            <div className="flex gap-3">
+              <div>
+                <label className="block text-xs text-gray-500">시작 월</label>
+                <input
+                  type="month"
+                  value={startMonth}
+                  onChange={e => setStartMonth(e.target.value)}
+                  className="border rounded px-2 py-1"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500">종료 월</label>
+                <input
+                  type="month"
+                  value={endMonth}
+                  onChange={e => setEndMonth(e.target.value)}
+                  className="border rounded px-2 py-1"
+                />
+              </div>
+              <button
+                onClick={handleAutoLoad}
+                disabled={listLoading}
+                className="bg-purple-600 text-white px-3 py-1 rounded"
+              >
                 {listLoading ? '불러오는 중...' : '⚙️ 자동 불러오기'}
               </button>
             </div>
+            <button
+              onClick={addRow}
+              className="bg-blue-600 text-white px-3 py-1 rounded"
+            >
+              + 행 추가
+            </button>
           </div>
 
           {/* 테이블 */}
@@ -247,7 +275,7 @@ export default function ManualSalaryPage() {
                   <th className="border p-2">이름</th>
                   <th className="border p-2">직급</th>
                   <th className="border p-2 text-right">월급</th>
-                  <th className="border p-2 text-right">추가금액</th>
+                  <th className="border p-2 text-right">추가금</th>
                   <th className="border p-2 text-right">월매출</th>
                   <th className="border p-2">월</th>
                   <th className="border p-2 text-right">총급여</th>
@@ -255,79 +283,80 @@ export default function ManualSalaryPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.length === 0 && (
+                {rows.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="text-center p-4 text-gray-500">
-                      아직 데이터가 없습니다. "행 추가" 또는 "자동 불러오기"를 사용하세요.
+                      아직 데이터가 없습니다. 자동 불러오기 또는 행 추가를 이용하세요.
                     </td>
                   </tr>
+                ) : (
+                  rows.map((r, i) => (
+                    <tr key={i}>
+                      <td className="p-2">
+                        <input
+                          type="text"
+                          value={r.name}
+                          onChange={e => updateRow(i, 'name', e.target.value)}
+                          className="border rounded px-2 py-1 w-full"
+                        />
+                      </td>
+                      <td className="p-2">
+                        <select
+                          value={r.rank}
+                          onChange={e => updateRow(i, 'rank', e.target.value as Rank)}
+                          className="border rounded px-2 py-1 w-full"
+                        >
+                          {RANKS.map(rank => (
+                            <option key={rank}>{rank}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="p-2 text-right">
+                        <input
+                          type="number"
+                          value={r.base}
+                          onChange={e => updateRow(i, 'base', Number(e.target.value))}
+                          className="border rounded px-2 py-1 w-full text-right"
+                        />
+                      </td>
+                      <td className="p-2 text-right">
+                        <input
+                          type="number"
+                          value={r.extra}
+                          onChange={e => updateRow(i, 'extra', Number(e.target.value))}
+                          className="border rounded px-2 py-1 w-full text-right"
+                        />
+                      </td>
+                      <td className="p-2 text-right">
+                        <input
+                          type="number"
+                          value={r.sales}
+                          onChange={e => updateRow(i, 'sales', Number(e.target.value))}
+                          className="border rounded px-2 py-1 w-full text-right"
+                        />
+                      </td>
+                      <td className="p-2">
+                        <input
+                          type="month"
+                          value={r.month}
+                          onChange={e => updateRow(i, 'month', e.target.value)}
+                          className="border rounded px-2 py-1"
+                        />
+                      </td>
+                      <td className="p-2 text-right font-semibold text-blue-700">
+                        {KRW(totalSalary(r))}
+                      </td>
+                      <td className="p-2 text-center">
+                        <button
+                          onClick={() => removeRow(i)}
+                          className="text-red-600 underline text-xs"
+                        >
+                          삭제
+                        </button>
+                      </td>
+                    </tr>
+                  ))
                 )}
-                {rows.map((r, i) => (
-                  <tr key={i} className="border-t">
-                    <td className="p-2">
-                      <input
-                        type="text"
-                        value={r.name}
-                        onChange={e => updateRow(i, 'name', e.target.value)}
-                        className="border rounded px-2 py-1 w-full"
-                      />
-                    </td>
-                    <td className="p-2">
-                      <select
-                        value={r.rank}
-                        onChange={e => updateRow(i, 'rank', e.target.value as Rank)}
-                        className="border rounded px-2 py-1 w-full"
-                      >
-                        {RANKS.map(rank => (
-                          <option key={rank}>{rank}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="p-2 text-right">
-                      <input
-                        type="number"
-                        value={r.base}
-                        onChange={e => updateRow(i, 'base', Number(e.target.value))}
-                        className="border rounded px-2 py-1 w-full text-right"
-                      />
-                    </td>
-                    <td className="p-2 text-right">
-                      <input
-                        type="number"
-                        value={r.extra}
-                        onChange={e => updateRow(i, 'extra', Number(e.target.value))}
-                        className="border rounded px-2 py-1 w-full text-right"
-                      />
-                    </td>
-                    <td className="p-2 text-right">
-                      <input
-                        type="number"
-                        value={r.sales}
-                        onChange={e => updateRow(i, 'sales', Number(e.target.value))}
-                        className="border rounded px-2 py-1 w-full text-right"
-                      />
-                    </td>
-                    <td className="p-2">
-                      <input
-                        type="month"
-                        value={r.month}
-                        onChange={e => updateRow(i, 'month', e.target.value)}
-                        className="border rounded px-2 py-1"
-                      />
-                    </td>
-                    <td className="p-2 text-right font-semibold text-blue-700">
-                      {KRW(totalSalary(r))}
-                    </td>
-                    <td className="p-2 text-center">
-                      <button
-                        onClick={() => removeRow(i)}
-                        className="text-red-600 underline text-xs"
-                      >
-                        삭제
-                      </button>
-                    </td>
-                  </tr>
-                ))}
               </tbody>
             </table>
           </div>
@@ -397,7 +426,7 @@ export default function ManualSalaryPage() {
                 </thead>
                 <tbody>
                   {listRows.map((r, i) => (
-                    <tr key={i} className="border-t">
+                    <tr key={i}>
                       <td className="p-2">{r.month}</td>
                       <td className="p-2">{r.name}</td>
                       <td className="p-2">{r.rank || '-'}</td>
