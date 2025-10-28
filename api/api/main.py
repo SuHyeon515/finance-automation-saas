@@ -331,11 +331,12 @@ async def upload_file(
         # 5️⃣ 거래내역 저장
         recs = []
         for _, r in group.iterrows():
+            tx_date = pd.to_datetime(r['date'], errors="coerce").normalize()  # ✅ 날짜만 유지
             recs.append({
                 'user_id': user_id,
                 'upload_id': upload_id,
                 'branch': branch,
-                'tx_date': pd.to_datetime(r['date'], errors="coerce").tz_localize("Asia/Seoul").tz_convert("UTC").isoformat(),
+                'tx_date': tx_date.isoformat(),  # ✅ 시간대 변환 제거
                 'description': (r.get('description') or ''),
                 'memo': (r.get('memo') or ''),
                 'amount': float(r.get('amount', 0) or 0),
