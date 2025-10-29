@@ -1908,13 +1908,12 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         raise HTTPException(status_code=500, detail=str(e))
     
 
-# === GPT 분석 (💈 제이가빈 고정 템플릿 + 포맷 유지 완성판) ===
+# === GPT 분석 (💈 제이가빈 고정 템플릿 + 포맷 유지 완성판 + 월별 BEP 반영) ===
 @app.post('/gpt/salon-analysis')
 async def salon_analysis(
     body: dict = Body(...),
     authorization: Optional[str] = Header(None),
 ):
-
     if not openai_client:
         raise HTTPException(status_code=500, detail='OPENAI_API_KEY 미설정')
 
@@ -2025,45 +2024,65 @@ async def salon_analysis(
     avg_pass_usage_rate = pass_usage_rate
 
     # ==============================
-    # 2️⃣-2️⃣ 디자이너별 BEP 자동 계산 (인턴 제외)
+    # 🔄 2️⃣-2️⃣ 월별 BEP 자동 계산 (인턴 제외)
     # ==============================
     bep_list = []
-    if designer_rows:
+    bep_monthly_list = []
+
+    if designer_rows and months:
         designers_only = [r for r in designer_rows if "인턴" not in (r.get("rank") or "")]
-        fixed_per_designer = fixed_expense / max(len(designers_only), 1)
+        num_designers = max(len(designers_only), 1)
 
-        for r in designers_only:
-            name = r.get("name")
-            rank = r.get("rank", "")
-            commission_rate = 0.38
-            if "실장" in rank:
-                commission_rate = 0.39
-            elif "부원장" in rank:
-                commission_rate = 0.40
-            elif "대표" in rank or "원장" in rank:
-                commission_rate = 0.43
+        for month_data in months:
+            month_label = month_data.get("month") or "기간미상"
+            monthly_sales = (
+                (float(month_data.get("card_sales", 0)) +
+                 float(month_data.get("pay_sales", 0)) +
+                 float(month_data.get("cash_sales", 0)) +
+                 float(month_data.get("account_sales", 0)))
+                - float(month_data.get("pass_paid", 0))
+                + float(month_data.get("pass_used", 0))
+            )
 
-            salary = float(r.get("total_amount", 0) or 0)
-            personal_sales = avg_realized_sales / max(len(designers_only), 1)
+            fixed_per_designer = fixed_expense / num_designers
+            monthly_results = []
 
-            bep = fixed_per_designer / (1 - commission_rate)
-            achievement_rate = (personal_sales / bep * 100) if bep > 0 else 0
-            margin = personal_sales - bep
+            for r in designers_only:
+                name = r.get("name")
+                rank = r.get("rank", "")
+                commission_rate = 0.38
+                if "실장" in rank:
+                    commission_rate = 0.39
+                elif "부원장" in rank:
+                    commission_rate = 0.40
+                elif "대표" in rank or "원장" in rank:
+                    commission_rate = 0.43
 
-            bep_list.append({
-                "name": name,
-                "rank": rank,
-                "commission": commission_rate,
-                "bep": round(bep, 0),
-                "salary": round(salary, 0),
-                "personal_sales": round(personal_sales, 0),
-                "achievement": round(achievement_rate, 1),
-                "margin": round(margin, 0),
+                personal_sales = monthly_sales / num_designers
+                bep = fixed_per_designer / (1 - commission_rate)
+                achievement_rate = (personal_sales / bep * 100) if bep > 0 else 0
+                margin = personal_sales - bep
+
+                monthly_results.append({
+                    "month": month_label,
+                    "name": name,
+                    "rank": rank,
+                    "personal_sales": round(personal_sales, 0),
+                    "bep": round(bep, 0),
+                    "achievement": round(achievement_rate, 1),
+                    "margin": round(margin, 0),
+                })
+                bep_list.append(monthly_results[-1])
+
+            bep_monthly_list.append({
+                "month": month_label,
+                "monthly_sales": round(monthly_sales, 0),
+                "bep_results": monthly_results,
             })
 
     bep_info = "\n".join([
-        f"{b['name']} ({b['rank']}) → 매출 {b['personal_sales']:,.0f}원 / BEP {b['bep']:,.0f}원 "
-        f"(달성률 {b['achievement']:.1f}%, 수익차이 {b['margin']:,.0f}원)"
+        f"{b['month']} - {b['name']}({b['rank']}) → 매출 {b['personal_sales']:,.0f}원 / BEP {b['bep']:,.0f}원 "
+        f"(달성률 {b['achievement']:.1f}%, 차이 {b['margin']:,.0f}원)"
         for b in bep_list
     ]) if bep_list else "디자이너별 BEP 분석 불가 (데이터 부족)"
 
@@ -2282,11 +2301,9 @@ async def salon_analysis(
             ],
             timeout=120
         )
-
         if not resp or not resp.choices or not resp.choices[0].message.content:
             raise ValueError("GPT 응답이 비어 있습니다.")
         analysis_text = resp.choices[0].message.content
-
     except Exception as e:
         print("❌ [GPT 호출 실패]", e)
         raise HTTPException(status_code=500, detail=f"GPT 분석 요청 실패: {e}")
@@ -2326,7 +2343,6 @@ async def salon_analysis(
         "avg_net_profit": avg_net_profit,
         "avg_labor_cost": avg_labor_cost,
     }
-
 
 
 # ✅ 사업자 유입총액 계산 API (내수금, 기타수입 제외)
