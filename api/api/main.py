@@ -2011,7 +2011,6 @@ async def salon_analysis(
     # ==============================
     # 🌙 평균 계산 보정 (다중 개월 구간 대응)
     # ==============================
-    from dateutil.relativedelta import relativedelta
 
     # 개월 수 계산
     start_y, start_m = map(int, start_month.split("-"))
@@ -2111,16 +2110,15 @@ async def salon_analysis(
     # 🔹 리포트용 표시 텍스트용으로도 평균값 사용
     analysis_range = f"{start_month} ~ {end_month} ({months_diff}개월 평균 분석)"
     title_date = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
-    # 💾 GPT 프롬프트에 자동 KPI 포함
-    # 💾 GPT 프롬프트 (💈 제이가빈 최신 정정 + 다중월 비교 대응)
+    # 💾 GPT 프롬프트 (💈 제이가빈 최신 정정 + 다중월 비교 대응 + BEP 자동반영)
     prompt = f"""
     💈 제이가빈 재무분석 프롬프트 (최신 정정 + 다중월 비교 대응판)
 
     당신은 미용실 전문 재무 분석가 AI입니다.
     입력된 데이터를 기반으로 **{branch}** 지점의 ‘실현 매출(Realized Revenue)’ 중심 손익분석을 수행하십시오.  
     이 보고서는 **{start_month} ~ {end_month} ({months_diff}개월)** 데이터를 기반으로 하며,  
-    각 월별 분석을 **순차적으로 ①, ②, ③월 … 형태로 개별 요약**한 뒤  
-    **전체 구간 평균 및 추세 비교, 리스크 요약, 개선 제안**까지 포함해야 합니다.
+    각 월별 분석을 **①, ②, ③월 … 형태로 순차 요약**하고  
+    **전체 평균·추세 비교, 리스크 요약, 개선 제안, KPI 자동분석**까지 포함해야 합니다.
 
     모든 금액은 원(₩), 비율은 %, 차이는 p 단위로 표시하십시오.  
     문단은 최소 4개 이상으로 구성하고, KPI 및 표를 반드시 포함하십시오.
@@ -2235,16 +2233,8 @@ async def salon_analysis(
     • 결제비중 리스크 / 커미션 효율성 / 현금흐름 안정성  
     • 인건비 구조 최적화 / KPI 개선 3단계 전략  
 
-    [Ⅵ. 자동 KPI 산출(월평균 기준)]
-    구분	목표	실제	달성률
-    매출	{target_sales:,.0f}	{actual_sales:,.0f}	{kpi_sales_rate:.1f}%
-    순이익	{target_profit:,.0f}	{actual_profit:,.0f}	{kpi_profit_rate:.1f}%
-    소진률	{target_usage_rate:.1f}%	{actual_usage_rate:.1f}%	{kpi_usage_rate:.1f}%
-    인건비율	{target_labor_rate:.1f}%	{actual_labor_rate:.1f}%	{kpi_labor_eff:.1f}%
-    객단가상승률	{target_growth_rate:.1f}%	{actual_growth_rate:.1f}%	{kpi_growth_rate:.1f}%
-
     ───────────────────────────────
-    [Ⅷ. 디자이너별 BEP 달성률 및 순이익 분석]
+    [Ⅺ. 디자이너별 BEP 달성률 및 순이익 분석]
     {bep_info}
 
     ───────────────────────────────
