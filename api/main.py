@@ -2031,14 +2031,17 @@ async def salon_analysis(
         for month_data in months:
             month_label = (month_data.get("month") or "기간미상")[:7]
 
-            # ✅ 해당 월의 실현매출 계산
+            # ✅ 월별 매출/정액권/소진률 계산
+            month_pass_paid = float(month_data.get("pass_paid", 0))
+            month_pass_used = float(month_data.get("pass_used", 0))
+            month_usage_rate = (month_pass_used / month_pass_paid * 100) if month_pass_paid else 0
+
             monthly_sales = (
                 (float(month_data.get("card_sales", 0)) +
-                 float(month_data.get("pay_sales", 0)) +
-                 float(month_data.get("cash_sales", 0)) +
-                 float(month_data.get("account_sales", 0)))
-                - float(month_data.get("pass_paid", 0))
-                + float(month_data.get("pass_used", 0))
+                float(month_data.get("pay_sales", 0)) +
+                float(month_data.get("cash_sales", 0)) +
+                float(month_data.get("account_sales", 0)))
+                - month_pass_paid + month_pass_used
             )
 
             # ✅ 해당 월의 실제 지출 계산 (date 필드에서 월 추출)
@@ -2070,7 +2073,12 @@ async def salon_analysis(
 
                 personal_sales = monthly_sales / num_designers
                 bep = fixed_per_designer / (1 - commission_rate)
-                achievement_rate = (personal_sales / bep * 100) if bep > 0 else 0
+
+                # ✅ BEP 최소 보정치 (0 방지)
+                if bep <= 0:
+                    bep = personal_sales * 0.8  
+
+                achievement_rate = (personal_sales / bep * 100)
                 margin = personal_sales - bep
 
                 monthly_bep_data.append({
@@ -2084,17 +2092,19 @@ async def salon_analysis(
                 })
                 bep_list.append(monthly_bep_data[-1])
 
+            # ✅ 월별 평균 BEP + 소진률 저장
             avg_monthly_achievement = sum([b["achievement"] for b in monthly_bep_data]) / len(monthly_bep_data)
             bep_monthly_results.append({
                 "month": month_label,
                 "realized_sales": round(monthly_sales, 0),
                 "net_profit": round(monthly_profit, 0),
                 "avg_bep_achievement": round(avg_monthly_achievement, 1),
+                "usage_rate": round(month_usage_rate, 1)  # ✅ 추가됨
             })
 
     bep_monthly_text = "\n".join([
         f"{m['month']}월 → 실현매출 {m['realized_sales']:,.0f}원 / 순이익 {m['net_profit']:,.0f}원 / "
-        f"평균 BEP 달성률 {m['avg_bep_achievement']:.1f}%"
+        f"소진률 {m['usage_rate']:.1f}% / 평균 BEP 달성률 {m['avg_bep_achievement']:.1f}%"
         for m in bep_monthly_results
     ])
     
