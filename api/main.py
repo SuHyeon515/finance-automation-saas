@@ -2106,7 +2106,7 @@ async def salon_analysis(
 
     # 🔹 리포트용 표시 텍스트용으로도 평균값 사용
     analysis_range = f"{start_month} ~ {end_month} ({months_diff}개월 평균 분석)"
-    title = f"{branch} / {title_date} / {start_month}~{end_month} ({months_diff}개월 평균 분석)"
+    title_date = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
     # 💾 GPT 프롬프트에 자동 KPI 포함
     prompt = f"""
     💈 제이가빈 재무분석 프롬프트 (자동 KPI 반영 버전)
@@ -2209,6 +2209,8 @@ async def salon_analysis(
     except Exception as e:
         print("[GPT 분석 저장 실패]", e)
         analysis_id = None
+
+    title = f"{branch} / {title_date} / {start_month}~{end_month} ({months_diff}개월 평균 분석)"
 
     return {
         "analysis": analysis_text,
