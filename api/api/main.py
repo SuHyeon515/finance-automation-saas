@@ -2053,23 +2053,48 @@ async def salon_analysis(
     card_share = (card_sales * 0.8 / commission_net_sales * 100) if commission_net_sales else 0
     pay_share = (pay_sales * 0.85 / commission_net_sales * 100) if commission_net_sales else 0
     cashacct_share = (((cash_sales + account_sales) * 0.8) / commission_net_sales * 100) if commission_net_sales else 0
+    # ==============================
+    # 🌙 평균 계산 보정 (다중 개월 구간 대응)
+    # ==============================
+    from dateutil.relativedelta import relativedelta
+
+    # 개월 수 계산
+    start_y, start_m = map(int, start_month.split("-"))
+    end_y, end_m = map(int, end_month.split("-"))
+    months_diff = (end_y - start_y) * 12 + (end_m - start_m) + 1
+    if months_diff < 1:
+        months_diff = 1  # 최소 1개월 보정
+
+    # 🔹 합계형 → 평균형 지표 변환
+    avg_total_sales = total_sales / months_diff
+    avg_realized_sales = realized_sales / months_diff
+    avg_net_profit = net_profit / months_diff
+    avg_fixed_expense = fixed_expense / months_diff
+    avg_variable_expense = variable_expense / months_diff
+    avg_labor_cost = labor_cost / months_diff
+    avg_pass_paid = pass_paid_total / months_diff
+    avg_pass_used = pass_used_total / months_diff
+    avg_pass_balance = pass_balance_amount / months_diff
+
+    # 🔹 소진률은 평균 비율 그대로 사용
+    avg_pass_usage_rate = pass_usage_rate
 
     # ==============================
-    # 5️⃣ KPI 자동 계산 추가
+    # 5️⃣ KPI 자동 계산 (월평균 기준)
     # ==============================
 
-    # 🎯 KPI 목표값 (기준)
+    # 🎯 KPI 목표값 (월 기준)
     target_sales = 100_000_000
     target_profit = 40_000_000
     target_usage_rate = 100
     target_labor_rate = 30
     target_growth_rate = 5
 
-    # 📊 실제값 (백엔드 계산된 값 기반)
-    actual_sales = realized_sales
-    actual_profit = net_profit
-    actual_usage_rate = pass_usage_rate
-    actual_labor_rate = (labor_cost / realized_sales * 100) if realized_sales else 0
+    # 📊 실제값 (월평균 기준)
+    actual_sales = avg_realized_sales
+    actual_profit = avg_net_profit
+    actual_usage_rate = avg_pass_usage_rate
+    actual_labor_rate = (avg_labor_cost / avg_realized_sales * 100) if avg_realized_sales else 0
     actual_growth_rate = ((actual_sales - target_sales) / target_sales * 100)
 
     # 🎯 KPI 달성률 자동 계산
@@ -2079,6 +2104,9 @@ async def salon_analysis(
     kpi_labor_eff = (target_labor_rate / actual_labor_rate * 100) if actual_labor_rate else 0
     kpi_growth_rate = (actual_growth_rate + 100)
 
+    # 🔹 리포트용 표시 텍스트용으로도 평균값 사용
+    analysis_range = f"{start_month} ~ {end_month} ({months_diff}개월 평균 분석)"
+    title = f"{branch} / {title_date} / {start_month}~{end_month} ({months_diff}개월 평균 분석)"
     # 💾 GPT 프롬프트에 자동 KPI 포함
     prompt = f"""
     💈 제이가빈 재무분석 프롬프트 (자동 KPI 반영 버전)
@@ -2095,7 +2123,7 @@ async def salon_analysis(
     • 운영형태: 미용실 (시술 + 클리닉)
     • 디자이너(이름/직급): {designer_info}
     • 인턴 수: {intern_count}
-    • 분석기간: {start_month} ~ {end_month}
+    • 분석기간: {analysis_range}
 
     ⸻
 
@@ -2123,7 +2151,7 @@ async def salon_analysis(
     • 카드: {card_share:.1f}% / 페이: {pay_share:.1f}% / 현금·계좌: {cashacct_share:.1f}%
 
     ⸻
-    
+
     [Ⅵ. 디자이너별 BEP 분석]
     {bep_info}
 
