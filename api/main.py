@@ -2092,44 +2092,43 @@ async def salon_analysis(
     # 6️⃣ GPT 프롬프트 생성 (BEP/달성률 포함)
     # ==============================
     prompt = f"""
-💈 제이가빈 재무분석 프롬프트 (BEP 달성률 + 커미션율 + 정액권 리스크 완전 통합판)
+💈 제이가빈 재무분석 프롬프트 (최신 정정 버전)
 
 당신은 미용실 전문 재무 분석가 AI입니다.
 입력된 데이터를 기반으로 {branch}의 ‘실현 매출(Realized Revenue)’ 중심 손익분석,
-디자이너별 BEP, 결제방식별 순매출 구조, BEP 달성률, 커미션 구조, 미래 리스크, KPI 예측을 수행하십시오.
-모든 금액은 원(₩) 단위이며, 실제 회계 논리 및 수식을 기반으로 분석해야 합니다.
+디자이너별 BEP, 결제방식별 순매출 구조, 미래 리스크, KPI 예측을 수행하십시오.
+모든 금액은 원(₩) 단위입니다.
 
 ⸻
 
 [Ⅰ. 지점 기본정보]
-    • 지점명: {branch}
-    • 운영형태: 미용실 (시술 + 클리닉)
-    • 디자이너(이름/직급): {designer_info}
-    • 디자이너별 BEP 및 달성률:
-{bep_text}
-    • 평균 BEP: {avg_bep:,}원
-    • 평균 달성률: {avg_ach_rate}%
-    • 인턴 수: {intern_count}
-    • 분석기간: {start_month} ~ {end_month}
+• 지점명: {branch}
+• 분석기간: {start_month} ~ {end_month}
+• 디자이너 급여정보: {designer_info}
+• 인원현황:
+{staff_summary}
 
 ⸻
 
-[Ⅱ. 매출 입력(숫자만)]
-    • 총매출(기간 합계): {total_sales:,}
-    • 정액권 결제총액(선결제): {pass_paid_total:,}
-    • 정액권 차감액(실사용): {pass_used_total:,}
-    • 페이매출(기간 합계): {pay_sales:,}
-    • 방문고객(기간 합계): {visitors_total:,}
-    • 카드매출: {card_sales:,}
-    • 계좌이체매출: {account_sales:,}
+[Ⅱ. 매출 입력]
+• 총매출(기간 합계): {total_sales:,}
+• 정액권 결제총액(선결제): {pass_paid_total:,}
+• 정액권 차감액(실사용): {pass_used_total:,}
+• 페이매출: {safe_sum("pay_sales"):,}
+• 카드매출: {safe_sum("card_sales"):,}
+• 계좌이체매출: {safe_sum("account_sales"):,}
+• 현금매출: {safe_sum("cash_sales"):,}
+• 방문고객수: {visitors_total:,}
 
 ⸻
 
-[Ⅲ. 지출 입력(숫자만)]
-    • 고정지출(기간 합계): {fixed_expense:,}
-    • 변동지출(기간 합계): {variable_expense:,}
+[Ⅲ. 지출 입력]
+• 고정지출(기간 합계): {fixed_expense:,}
+• 변동지출(기간 합계): {variable_expense:,}
 
 ⸻
+
+💈 정액권 회계 및 정산 구조 (최종판)
 
 [Ⅳ. 커미션 구조(표준율)]
 
@@ -2222,7 +2221,7 @@ async def salon_analysis(
     # 7️⃣ GPT 호출
     # ==============================
     resp = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         temperature=0.3,
         messages=[
             {
