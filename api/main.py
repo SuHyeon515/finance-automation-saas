@@ -2060,13 +2060,13 @@ async def salon_analysis(
 
             monthly_profit = monthly_sales - (month_exp_fixed + month_exp_var + month_labor)
 
-            # ✅ 월별 매출 비중 기반 고정비 분배
-            if fixed_expense > 0 and realized_sales > 0:
-                fixed_per_designer = (fixed_expense * (monthly_sales / realized_sales)) / num_designers
-            else:
-                fixed_per_designer = (fixed_expense / months_diff) / num_designers
+            # 🔄 월별 BEP 계산 (현실형 버전)
+            monthly_total_cost = month_exp_fixed + month_exp_var + month_labor
 
-            # ✅ 디자이너별 BEP 계산
+            # ✅ 월별 총비용을 디자이너 수로 분배
+            fixed_per_designer = (month_exp_fixed + month_exp_var) / num_designers if num_designers > 0 else 0
+            labor_per_designer = month_labor / num_designers if num_designers > 0 else 0
+
             for r in designers_only:
                 name = r.get("name")
                 rank = r.get("rank", "")
@@ -2078,11 +2078,15 @@ async def salon_analysis(
                 elif "대표" in rank or "원장" in rank:
                     commission_rate = 0.43
 
+                # ✅ 디자이너별 매출은 월 매출 / 디자이너 수
                 personal_sales = monthly_sales / num_designers
-                bep = fixed_per_designer / (1 - commission_rate)
+
+                # ✅ BEP 계산: (고정비+변동비+인건비) / (1 - 커미션율)
+                bep = (fixed_per_designer + labor_per_designer) / (1 - commission_rate)
                 if bep <= 0:
                     bep = personal_sales * 0.8
-                achievement_rate = (personal_sales / bep * 100)
+
+                achievement_rate = (personal_sales / bep * 100) if bep > 0 else 0
                 margin = personal_sales - bep
 
                 monthly_bep_data.append({
@@ -2095,7 +2099,7 @@ async def salon_analysis(
                     "margin": round(margin, 0),
                 })
                 bep_list.append(monthly_bep_data[-1])
-
+                
             # ✅ 월별 평균 BEP + 소진률 저장
             avg_monthly_achievement = sum([b["achievement"] for b in monthly_bep_data]) / len(monthly_bep_data)
             bep_monthly_results.append({
