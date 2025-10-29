@@ -116,17 +116,37 @@ export default function GPTSalonAnalysisPage() {
           .gte('month', startMonth)
           .lte('month', endMonth)
 
-        const salaryByMonth: Record<string, any> = {}
+        const salaryByMonth: Record<
+          string,
+          {
+            designers_count: number
+            interns_count: number
+            advisors_count: number
+            salaries: SalaryItem[]
+          }
+        > = {}
+
         salaryData?.forEach((r) => {
           const m = r.month
           if (!salaryByMonth[m]) {
-            salaryByMonth[m] = { designers_count: 0, interns_count: 0, advisors_count: 0, salaries: [] }
+            salaryByMonth[m] = {
+              designers_count: 0,
+              interns_count: 0,
+              advisors_count: 0,
+              salaries: [],
+            }
           }
+
           const rank = (r.rank || '').toLowerCase()
           if (/디자이너|실장|부원장|대표원장|대표/.test(rank)) salaryByMonth[m].designers_count++
           else if (/인턴/.test(rank)) salaryByMonth[m].interns_count++
           else if (/바이저|매니저/.test(rank)) salaryByMonth[m].advisors_count++
-          salaryByMonth[m].salaries.push(r)
+
+          salaryByMonth[m].salaries.push({
+            name: r.name,
+            rank: r.rank,
+            total_amount: r.total_amount,
+          })
         })
 
         // 4️⃣ 월별 사업자 유입 계산
@@ -147,7 +167,10 @@ export default function GPTSalonAnalysisPage() {
           ...b,
           fixed_expense: expMap[b.month]?.fixed_expense || 0,
           variable_expense: expMap[b.month]?.variable_expense || 0,
-          ...salaryByMonth[b.month],
+          designers_count: salaryByMonth[b.month]?.designers_count || 0,
+          interns_count: salaryByMonth[b.month]?.interns_count || 0,
+          advisors_count: salaryByMonth[b.month]?.advisors_count || 0,
+          salaries: salaryByMonth[b.month]?.salaries || [],
           bank_inflow: inflowByMonth[b.month] || 0,
         }))
 
@@ -334,12 +357,20 @@ export default function GPTSalonAnalysisPage() {
           <div className="p-3 border rounded bg-white"><div className="text-gray-500">총 지출 합계</div><div className="font-semibold text-right">{totalExpense.toLocaleString()}원</div></div>
         </div>
 
-        <div className="border-t pt-4 grid sm:grid-cols-3 gap-4">
-          <div className="p-3 border rounded bg-white"><div className="text-gray-500">정액권 결제총액</div><div className="font-semibold text-right">{totalPassPaid.toLocaleString()}원</div></div>
-          <div className="p-3 border rounded bg-white"><div className="text-gray-500">정액권 차감총액</div><div className="font-semibold text-right">{totalPassUsed.toLocaleString()}원</div></div>
-          <div className="p-3 border rounded bg-white"><div className="text-gray-500">정액권 잔액</div><div className="font-semibold text-right">{totalPassBalance.toLocaleString()}원</div></div>
+        <div className="p-3 border rounded bg-white">
+          <div className="text-gray-500">정액권 결제총액</div>
+          <div className="font-semibold text-right">{totalPassPaid.toLocaleString()}원</div>
+        </div>
+        <div className="p-3 border rounded bg-white">
+          <div className="text-gray-500">정액권 차감총액</div>
+          <div className="font-semibold text-right">{totalPassUsed.toLocaleString()}원</div>
+        </div>
+        <div className="p-3 border rounded bg-white">
+          <div className="text-gray-500">정액권 잔액</div>
+          <div className="font-semibold text-right">{totalPassBalance.toLocaleString()}원</div>
         </div>
       </section>
+
       {/* ───────── GPT 분석 버튼 ───────── */}
       <button
         onClick={handleAnalyze}
@@ -356,9 +387,11 @@ export default function GPTSalonAnalysisPage() {
           className="bg-white border rounded-lg shadow-sm p-6 space-y-3 mt-6"
         >
           <h2 className="text-lg font-semibold">{title || 'GPT 분석 결과'}</h2>
-          <pre className="whitespace-pre-wrap leading-relaxed text-gray-800">{result}</pre>
+          <pre className="whitespace-pre-wrap leading-relaxed text-gray-800">
+            {result}
+          </pre>
           {analysisId && (
-            <p className="text-xs text-gray-400">
+            <p className="text-xs text-gray-400 text-right">
               저장됨 ID: {analysisId}
             </p>
           )}
