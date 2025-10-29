@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Any, Literal
 import httpx
 import numpy as np
 import pandas as pd
-from datetime import datetime,timedelta
+from datetime import datetime,timezone,timedelta
 from calendar import monthrange
 from dateutil.relativedelta import relativedelta
 from fastapi import FastAPI, UploadFile, File, Form, Header,APIRouter, HTTPException, Depends, Query, Body
@@ -1918,30 +1918,27 @@ async def salon_analysis(
     authorization: Optional[str] = Header(None),
 ):
     """
-    GPT 재무 분석 API (최적화 버전)
+    GPT 재무 분석 + Supabase 자동 저장
     ✅ 기존 프롬프트는 그대로 유지
-    ✅ months[] 기반 다중월 자동 통합
-    ✅ 매출·객수·리뷰 등 성장률 계산 자동 보정
-    ✅ supabase 데이터 및 transactions, expenses 자동 반영
+    ✅ 다중월(months[]) 데이터가 들어오면 자동 합산/평균 처리 후 기존 구조에 반영
     """
-
     if not openai_client:
         raise HTTPException(status_code=500, detail='OPENAI_API_KEY 미설정')
 
-    # === 기본 필드 ===
     branch = body.get("branch")
     start_month = body.get("start_month")
     end_month = body.get("end_month")
     period_text = body.get("period_text", f"{start_month}~{end_month}")
     months = body.get("months", [])
+    year, month = map(int, end_month.split("-"))
+    last_day = monthrange(year, month)[1]
+    end_date_str = f"{end_month}-{last_day:02d}"
 
     user_id = await get_user_id(authorization)
     if not branch or not start_month or not end_month:
         raise HTTPException(status_code=400, detail="branch, start_month, end_month 필수")
 
-    # ==============================
-    # 1️⃣ Supabase 급여/인원 통계
-    # ==============================
+    # 1️⃣ 급여 통계
     try:
         res = (
             supabase.table("designer_salaries")
@@ -1980,9 +1977,7 @@ async def salon_analysis(
         for m, v in monthly_staff_stats.items()
     ]) or "데이터 없음"
 
-    # ==============================
     # 2️⃣ 지출 자동 집계
-    # ==============================
     try:
         exp_res = (
             supabase.table("expenses")
@@ -1997,12 +1992,10 @@ async def salon_analysis(
         fixed_expense = sum(x["amount"] for x in exp_data if x["category"] == "고정")
         variable_expense = sum(x["amount"] for x in exp_data if x["category"] == "변동")
     except Exception as e:
-        print("⚠️ 지출 자동 집계 실패:", e)
+        print(f"⚠️ [지출 자동 집계 생략] {e}")
         fixed_expense = variable_expense = 0
 
-    # ==============================
-    # 3️⃣ 사업자 유입 자동 계산
-    # ==============================
+    # 3️⃣ 사업자 유입 계산
     try:
         inflow_res = (
             supabase.table("transactions")
@@ -2010,7 +2003,7 @@ async def salon_analysis(
             .eq("user_id", user_id)
             .eq("branch", branch)
             .gte("tx_date", f"{start_month}-01")
-            .lte("tx_date", f"{end_month}-31")
+            .lte("tx_date", end_date_str)
             .execute()
         )
         inflow_rows = inflow_res.data or []
@@ -2022,16 +2015,14 @@ async def salon_analysis(
         print("⚠️ 사업자 유입 계산 실패:", e)
         bank_inflow = 0
 
-    # ==============================
-    # 4️⃣ 통장 잔액 자동 조회
-    # ==============================
+    # 4️⃣ 통장 잔액 조회 (← 여기도 end_date_str)
     try:
         bal_res = (
             supabase.table("transactions")
             .select("balance, tx_date")
             .eq("user_id", user_id)
             .eq("branch", branch)
-            .lte("tx_date", f"{end_month}-31")
+            .lte("tx_date", end_date_str)
             .order("tx_date", desc=True)
             .limit(1)
             .execute()
@@ -2273,6 +2264,7 @@ D: 부채>40% or 현금<40%
         "bank_inflow": bank_inflow,
         "staff_summary": monthly_staff_stats,
     }
+
 
 # ✅ 사업자 유입총액 계산 API (내수금, 기타수입 제외)
 @app.post('/transactions/income-filtered')
