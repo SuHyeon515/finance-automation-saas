@@ -1907,6 +1907,7 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         print("⚠️ 통장 잔액 조회 실패:", e)
         raise HTTPException(status_code=500, detail=str(e))
     
+
 # === GPT 분석 (💈 제이가빈 고정 템플릿 + 포맷 유지 완성판) ===
 @app.post('/gpt/salon-analysis')
 async def salon_analysis(
@@ -2000,17 +2001,22 @@ async def salon_analysis(
     except Exception as e:
         print(f"⚠️ [지출 조회 실패] {e}")
         fixed_expense = variable_expense = 0.0
-        
+
+    # 💰 실현 손익 관련 핵심 변수 계산
+    labor_cost = sum(float(r.get("total_amount", 0) or 0) for r in designer_rows)
+    net_profit = realized_sales - (fixed_expense + variable_expense + labor_cost)
+    pass_balance_amount = pass_paid_total - pass_used_total
+    pass_usage_rate = (pass_used_total / pass_paid_total * 100) if pass_paid_total else 0
+
     # ==============================
     # 🌙 평균 계산 보정 (다중 개월 구간 대응)
     # ==============================
+    from dateutil.relativedelta import relativedelta
 
     # 개월 수 계산
     start_y, start_m = map(int, start_month.split("-"))
     end_y, end_m = map(int, end_month.split("-"))
     months_diff = max((end_y - start_y) * 12 + (end_m - start_m) + 1, 1)
-    if months_diff < 1:
-        months_diff = 1  # 최소 1개월 보정
 
     # 🔹 합계형 → 평균형 지표 변환
     avg_total_sales = total_sales / months_diff
@@ -2022,8 +2028,6 @@ async def salon_analysis(
     avg_pass_paid = pass_paid_total / months_diff
     avg_pass_used = pass_used_total / months_diff
     avg_pass_balance = pass_balance_amount / months_diff
-
-    # 🔹 소진률은 평균 비율 그대로 사용
     avg_pass_usage_rate = pass_usage_rate
 
     # ==============================
@@ -2047,9 +2051,7 @@ async def salon_analysis(
             elif "대표" in rank or "원장" in rank:
                 commission_rate = 0.43
 
-            # 실제 급여
             salary = float(r.get("total_amount", 0) or 0)
-            # 실제 매출 (salon_monthly_data 중 개인별 분배 데이터 없으면 평균치라도 사용)
             personal_sales = avg_realized_sales / max(len(designers_only), 1)
 
             bep = fixed_per_designer / (1 - commission_rate)
@@ -2073,11 +2075,6 @@ async def salon_analysis(
         for b in bep_list
     ]) if bep_list else "디자이너별 BEP 분석 불가 (데이터 부족)"
 
-    labor_cost = sum(float(r.get("total_amount", 0) or 0) for r in designer_rows)
-    net_profit = realized_sales - (fixed_expense + variable_expense + labor_cost)
-    pass_balance_amount = pass_paid_total - pass_used_total
-    pass_usage_rate = (pass_used_total / pass_paid_total * 100) if pass_paid_total else 0
-
     # ==============================
     # 3️⃣ 결제 비중 및 커미션 반영 순매출 계산
     # ==============================
@@ -2091,24 +2088,20 @@ async def salon_analysis(
     # ==============================
     # 5️⃣ KPI 자동 계산 (월평균 기준)
     # ==============================
-
-    # 최근 실적 기반 자동 목표 설정
     growth_buffer = 0.15  # 최근 실적 대비 +15% 향상 목표
 
     target_sales = avg_realized_sales * (1 + growth_buffer)
     target_profit = avg_net_profit * (1 + growth_buffer)
-    target_usage_rate = min(avg_pass_usage_rate * (1 + 0.05), 100)  # 소진률은 최대 100%
-    target_labor_rate = max((avg_labor_cost / avg_realized_sales * 100) * 0.9, 20)  # 효율 개선 목표
+    target_usage_rate = min(avg_pass_usage_rate * (1 + 0.05), 100)
+    target_labor_rate = max((avg_labor_cost / avg_realized_sales * 100) * 0.9, 20)
     target_growth_rate = ((target_sales - avg_realized_sales) / avg_realized_sales * 100)
 
-    # 📊 실제값 (월평균 기준)
     actual_sales = avg_realized_sales
     actual_profit = avg_net_profit
     actual_usage_rate = avg_pass_usage_rate
     actual_labor_rate = (avg_labor_cost / avg_realized_sales * 100) if avg_realized_sales else 0
     actual_growth_rate = ((actual_sales - target_sales) / target_sales * 100)
 
-    # 🎯 KPI 달성률 자동 계산
     kpi_sales_rate = (actual_sales / target_sales * 100) if target_sales else 0
     kpi_profit_rate = (actual_profit / target_profit * 100) if target_profit else 0
     kpi_usage_rate = (actual_usage_rate / target_usage_rate * 100) if target_usage_rate else 0
@@ -2332,6 +2325,7 @@ async def salon_analysis(
         "avg_net_profit": avg_net_profit,
         "avg_labor_cost": avg_labor_cost,
     }
+
 
 
 # ✅ 사업자 유입총액 계산 API (내수금, 기타수입 제외)
