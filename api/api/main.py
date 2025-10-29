@@ -1907,7 +1907,7 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         print("⚠️ 통장 잔액 조회 실패:", e)
         raise HTTPException(status_code=500, detail=str(e))
     
-# === GPT 분석 (다중월 자동 통합 + 제이가빈 최신 프롬프트 + BEP 달성률 분석 포함) ===
+# === GPT 분석 (비교 분석 + BEP + 비용 자동 집계 포함 최신 버전) ===
 @app.post('/gpt/salon-analysis')
 async def salon_analysis(
     body: dict = Body(...),
@@ -1920,7 +1920,7 @@ async def salon_analysis(
     if not openai_client:
         raise HTTPException(status_code=500, detail='OPENAI_API_KEY 미설정')
 
-    # === 0. 입력 파라미터 ===
+    # === 0️⃣ 기본 입력 파라미터 ===
     branch = body.get("branch")
     start_month = body.get("start_month")
     end_month = body.get("end_month")
@@ -1930,7 +1930,7 @@ async def salon_analysis(
     if not branch or not start_month or not end_month:
         raise HTTPException(status_code=400, detail="branch, start_month, end_month 필수")
 
-    # 종료월 마지막 날짜 계산 (예: 2025-09 -> 2025-09-30)
+    # 종료월 말일 계산
     year, month = map(int, end_month.split("-"))
     last_day = monthrange(year, month)[1]
     end_date_str = f"{end_month}-{last_day:02d}"
@@ -1938,12 +1938,13 @@ async def salon_analysis(
     user_id = await get_user_id(authorization)
 
     # ==============================
-    # 1️⃣ 디자이너 급여 / 인원 통계 조회
+    # 1️⃣ 디자이너 급여 / 인턴 분리
     # ==============================
     try:
+        # total_sales 컬럼이 없을 경우에도 안전하게 처리
         res = (
             supabase.table("designer_salaries")
-            .select("name, rank, month, total_amount, total_sales")
+            .select("name, rank, month, total_amount")
             .eq("user_id", user_id)
             .eq("branch", branch)
             .gte("month", start_month)
@@ -1955,7 +1956,6 @@ async def salon_analysis(
         print("⚠️ 디자이너 급여 조회 실패:", e)
         designer_rows = []
 
-    # 월별 인원수 집계 (디자이너 / 인턴 카운트)
     monthly_staff_stats = {}
     for r in designer_rows:
         m = r.get("month")
@@ -1963,104 +1963,66 @@ async def salon_analysis(
         if m not in monthly_staff_stats:
             monthly_staff_stats[m] = {"디자이너": 0, "인턴": 0}
 
-        # 직급 판별
-        # 실장/부원장/대표 등은 모두 유료 매출 발생 인력으로 "디자이너" 그룹에 세고,
-        # "인턴"은 따로 센다.
-        if any(k in rank for k in ["디자이너", "실장", "부원장", "대표원장", "대표", "원장"]):
+        if any(k in rank for k in ["디자이너", "실장", "부원장", "대표", "원장"]):
             monthly_staff_stats[m]["디자이너"] += 1
         elif "인턴" in rank:
             monthly_staff_stats[m]["인턴"] += 1
 
-    # 프롬프트용 디자이너 정보 문자열 (예: "김실장(실장, 6,200,000원), ...")
     designer_info = (
         ", ".join([
             f"{r['name']}({r.get('rank','직급미입력')}, {int(float(r.get('total_amount',0))):,}원)"
             for r in designer_rows
         ]) if designer_rows else "해당 기간 디자이너 데이터 없음"
     )
-
-    # 인턴 총합 (기간 전체에서 월별 인턴 수 합산)
     intern_count = sum(v["인턴"] for v in monthly_staff_stats.values())
 
     # ==============================
-    # 2️⃣ BEP 계산 + 달성률 산출
+    # 2️⃣ BEP 계산 (total_sales 없어도 역산)
     # ==============================
-
-    # 직급별 커미션율 기본 가이드 (하한선 구간 기준)
     def get_commission_rate(rank: str):
-        rank_lower = (rank or "").lower()
-        # 우선순위: 대표/대표원장 > 부원장 > 실장 > 디자이너
-        if "대표원장" in rank_lower or "대표" in rank_lower:
+        r = (rank or "").lower()
+        if "대표" in r:
             return 0.43
-        elif "부원장" in rank_lower:
+        elif "부원장" in r:
             return 0.40
-        elif "실장" in rank_lower:
+        elif "실장" in r:
             return 0.38
-        elif "디자이너" in rank_lower:
+        elif "디자이너" in r:
             return 0.36
-        elif "원장" in rank_lower:
-            # '원장'만 있는 케이스도 대표권한에 가깝다고 보고 43%로 본다
+        elif "원장" in r:
             return 0.43
         else:
-            # 인턴 등: 커미션 기반 BEP 의미 없음 → 0
             return 0.00
 
     designer_bep_list = []
-    total_bep = 0.0
-    total_ach_rate = 0.0
+    total_bep = 0
+    total_ach_rate = 0
     valid_count = 0
 
     for r in designer_rows:
         rank = r.get("rank")
+        pay = float(r.get("total_amount", 0) or 0)
         rate = get_commission_rate(rank)
+        if rate == 0 or pay == 0:
+            continue
 
-        # 총 지급 급여 (total_amount)
-        total_pay = float(r.get("total_amount", 0) or 0)
+        bep = pay / (rate * 0.82)
+        sales_est = bep  # total_sales 없으므로 동일 가정
+        ach_rate = (sales_est / bep) * 100 if bep > 0 else 0
 
-        # 디자이너 개인 매출 (total_sales) 가 DB에 있으면 사용, 없으면 역산
-        # 역산식: 매출 * rate * 0.82(수수료공제후 가정) = total_pay  →  매출 = total_pay / (rate * 0.82)
-        sales_reported = float(r.get("total_sales", 0) or 0)
-        if sales_reported <= 0 and rate > 0:
-            try:
-                sales_reported = total_pay / (rate * 0.82) if total_pay > 0 else 0
-            except ZeroDivisionError:
-                sales_reported = 0
-
-        # BEP 계산: 해당 급여(total_pay)를 만들기 위해 필요한 최소 매출
-        # 같은 식이므로 BEP도 total_pay / (rate * 0.82)
-        if rate > 0 and total_pay > 0:
-            try:
-                bep = total_pay / (rate * 0.82)
-            except ZeroDivisionError:
-                bep = 0
-        else:
-            bep = 0
-
-        # 달성률 = 실제(or 추정)매출 / BEP
-        if bep > 0:
-            ach_rate = (sales_reported / bep) * 100.0
-        else:
-            ach_rate = 0.0
-
-        # 사람이 보기 좋은 형태로 저장
         designer_bep_list.append(
-            f"{r.get('name','?')}({rank or '직급미입력'}): "
-            f"BEP {round(bep):,}원 / 매출 {round(sales_reported):,}원 / 달성률 {round(ach_rate,1)}%"
+            f"{r['name']}({rank}): BEP {round(bep):,}원 / 매출 {round(sales_est):,}원 / 달성률 {round(ach_rate,1)}%"
         )
+        total_bep += bep
+        total_ach_rate += ach_rate
+        valid_count += 1
 
-        # 평균 계산용 누적
-        if bep > 0:
-            total_bep += bep
-            total_ach_rate += ach_rate
-            valid_count += 1
-
-    avg_bep = round(total_bep / valid_count) if valid_count > 0 else 0
-    avg_ach_rate = round(total_ach_rate / valid_count, 1) if valid_count > 0 else 0.0
-
+    avg_bep = round(total_bep / valid_count) if valid_count else 0
+    avg_ach_rate = round(total_ach_rate / valid_count, 1) if valid_count else 0
     bep_text = "\n".join(designer_bep_list) if designer_bep_list else "데이터 없음"
 
     # ==============================
-    # 3️⃣ 지출 자동 집계 (고정/변동)
+    # 3️⃣ 비용 자동 합산
     # ==============================
     try:
         exp_res = (
@@ -2073,145 +2035,100 @@ async def salon_analysis(
             .execute()
         )
         exp_data = exp_res.data or []
-
-        fixed_expense = sum(
-            float(x.get("amount", 0) or 0)
-            for x in exp_data
-            if (x.get("category") == "고정")
-        )
-        variable_expense = sum(
-            float(x.get("amount", 0) or 0)
-            for x in exp_data
-            if (x.get("category") == "변동")
-        )
+        fixed_expense = sum(float(x["amount"]) for x in exp_data if x["category"] == "고정")
+        variable_expense = sum(float(x["amount"]) for x in exp_data if x["category"] == "변동")
     except Exception as e:
         print(f"⚠️ [지출 자동 집계 생략] {e}")
-        fixed_expense = 0.0
-        variable_expense = 0.0
+        fixed_expense = variable_expense = 0.0
 
     # ==============================
-    # 4️⃣ 사업자 유입 / 통장 잔액
+    # 4️⃣ 매출 데이터 (months[]) 합산 및 비교
     # ==============================
-    try:
-        inflow_res = (
-            supabase.table("transactions")
-            .select("amount, category")
-            .eq("user_id", user_id)
-            .eq("branch", branch)
-            .gte("tx_date", f"{start_month}-01")
-            .lte("tx_date", end_date_str)
-            .execute()
-        )
-        inflow_rows = inflow_res.data or []
-
-        # 내수금/기타수입 제외한 순수 영업유입
-        bank_inflow = sum(
-            float(r.get("amount", 0) or 0)
-            for r in inflow_rows
-            if float(r.get("amount", 0) or 0) > 0
-            and not any(
-                ex in (r.get("category") or "")
-                for ex in ["내수금", "기타수입"]
-            )
-        )
-    except Exception as e:
-        print("⚠️ 사업자 유입 계산 실패:", e)
-        bank_inflow = 0.0
-
-    try:
-        bal_res = (
-            supabase.table("transactions")
-            .select("balance, tx_date")
-            .eq("user_id", user_id)
-            .eq("branch", branch)
-            .lte("tx_date", end_date_str)
-            .order("tx_date", desc=True)
-            .limit(1)
-            .execute()
-        )
-        cash_balance = float(bal_res.data[0].get("balance", 0) or 0) if bal_res.data else 0.0
-    except Exception as e:
-        print("⚠️ 통장 잔액 조회 실패:", e)
-        cash_balance = 0.0
-
-    # ==============================
-    # 5️⃣ months[] 합산 (프론트가 계산해준 월별 매출 구성)
-    # ==============================
-    def safe_sum(k: str) -> float:
+    def safe_sum(k):
         return sum(float(m.get(k, 0) or 0) for m in months)
 
-    # 카드/페이/현금/계좌가 분리돼 있고, 그 합을 총매출로 간주
     card_sales = safe_sum("card_sales")
     pay_sales = safe_sum("pay_sales")
     cash_sales = safe_sum("cash_sales")
     account_sales = safe_sum("account_sales")
-
     total_sales = card_sales + pay_sales + cash_sales + account_sales
-
-    visitors_total = safe_sum("visitors")
     pass_paid_total = safe_sum("pass_paid")
     pass_used_total = safe_sum("pass_used")
+    visitors_total = safe_sum("visitors")
 
-    # 인원현황 프롬프트용 (예: "2025-08: 디자이너 4명, 인턴 2명\n2025-09: ...")
-    staff_summary = (
-        "\n".join(
-            [
-                f"{m}: 디자이너 {v['디자이너']}명, 인턴 {v['인턴']}명"
-                for m, v in monthly_staff_stats.items()
-            ]
+    # 월별 비교 데이터 (첫달 vs 마지막달)
+    if len(months) >= 2:
+        first = months[0]
+        last = months[-1]
+        first_sales = float(first.get('total_sales', first.get('card_sales', 0) + first.get('pay_sales', 0) + first.get('cash_sales', 0) + first.get('account_sales', 0)))
+        last_sales = float(last.get('total_sales', last.get('card_sales', 0) + last.get('pay_sales', 0) + last.get('cash_sales', 0) + last.get('account_sales', 0)))
+        compare_text = (
+            f"💡 비교분석: {first.get('month')} 대비 {last.get('month')} 변화율\n"
+            f"- 총매출: {((last_sales - first_sales) / first_sales * 100 if first_sales else 0):.1f}%\n"
+            f"- 방문객: {((float(last.get('visitors', 0)) - float(first.get('visitors', 0))) / float(first.get('visitors', 1) or 1) * 100):.1f}%\n"
         )
-        if monthly_staff_stats
-        else "데이터 없음"
-    )
+    else:
+        compare_text = "비교분석: 단일 기간 분석입니다."
+
+    staff_summary = "\n".join(
+        [f"{m}: 디자이너 {v['디자이너']}명, 인턴 {v['인턴']}명" for m, v in monthly_staff_stats.items()]
+    ) if monthly_staff_stats else "데이터 없음"
+    # ==============================
+    # 5️⃣ 실현매출 & 순이익 자동 계산
+    # ==============================
+    realized_sales = (total_sales - pass_paid_total) + pass_used_total
+    labor_cost = sum(float(r.get("total_amount", 0) or 0) for r in designer_rows)
+    net_profit = realized_sales - (fixed_expense + variable_expense + labor_cost)
 
     # ==============================
-    # 6️⃣ GPT 프롬프트 생성 (BEP/달성률, 결제 구조 등 모두 포함)
+    # 5️⃣ GPT 프롬프트
     # ==============================
     prompt = f"""
-💈 제이가빈 재무분석 프롬프트 (최신 정정 버전)
+💈 제이가빈 재무분석 프롬프트 (비교 분석 모드)
 
-당신은 미용실 전문 재무 분석가 AI입니다.
-입력된 데이터를 기반으로 {branch}의 ‘실현 매출(Realized Revenue)’ 중심 손익분석,
-디자이너별 BEP, 결제방식별 순매출 구조, 미래 리스크, KPI 예측을 수행하십시오.
-모든 금액은 원(₩) 단위입니다.
+당신은 미용실 전문 재무분석가입니다.
+{branch}의 {period_text} 데이터를 기반으로 실현매출·BEP·비용·전월대비변화를 분석하세요.
 
-⸻
-
-[Ⅰ. 지점 기본정보]
-• 지점명: {branch}
-• 분석기간: {start_month} ~ {end_month}
-• 디자이너 급여정보: {designer_info}
-• 디자이너별 BEP(추정): 
-{bep_text}
+[Ⅰ. 기본정보]
+• 지점: {branch}
+• 기간: {start_month} ~ {end_month}
+• 디자이너 급여: {designer_info}
 • 평균 BEP: {avg_bep:,}원
 • 평균 달성률: {avg_ach_rate}%
-• 인원현황(월별 디자이너/인턴 수):
+• 인턴 수: {intern_count}명
+• 인원현황:
 {staff_summary}
 
-⸻
+[Ⅱ. 매출]
+• 총매출: {total_sales:,}원
+• 카드매출: {card_sales:,}원
+• 페이매출: {pay_sales:,}원
+• 현금매출: {cash_sales:,}원
+• 계좌이체매출: {account_sales:,}원
+• 정액권 결제: {pass_paid_total:,}원
+• 정액권 차감: {pass_used_total:,}원
+• 방문객 수: {visitors_total:,}명
 
-[Ⅱ. 매출 입력]
-• 총매출(기간 합계): {total_sales:,}
-• 정액권 결제총액(선결제): {pass_paid_total:,}
-• 정액권 차감액(실사용): {pass_used_total:,}
-• 페이매출: {pay_sales:,}
-• 카드매출: {card_sales:,}
-• 계좌이체매출: {account_sales:,}
-• 현금매출: {cash_sales:,}
-• 방문고객수: {visitors_total:,}
+[Ⅲ. 비용]
+• 고정비: {fixed_expense:,}원
+• 변동비: {variable_expense:,}원
 
-⸻
+[Ⅳ. BEP 산출]
+{bep_text}
 
-[Ⅲ. 지출 입력]
-• 고정지출(기간 합계): {fixed_expense:,}
-• 변동지출(기간 합계): {variable_expense:,}
-• 인건비(디자이너 급여 총합): {sum(float(r.get('total_amount',0) or 0) for r in designer_rows):,}원
-• 인턴수(기간 합산): {intern_count}명
-• 은행 유입(내수금/기타수입 제외): {bank_inflow:,}원
-• 분석 종료 시점 통장 잔액: {cash_balance:,}원
+[Ⅴ. 전월 대비 변화율]
+{compare_text}
 
-⸻
+• 실현매출: {realized_sales:,.0f}원
+• 순이익(추정): {net_profit:,.0f}원
+• 인건비율: {(labor_cost / realized_sales * 100 if realized_sales else 0):.1f}%
 
+[Ⅵ. 분석 요청]
+1️⃣ 결제 방식별 순매출 구조
+2️⃣ 실현매출 기준 수익률 및 회계 수익률 비교
+3️⃣ 인건비 반영 순이익 산출
+4️⃣ 정액권 리스크 및 잔액 분석
+5️⃣ KPI 개선 포인트 제시
 [Ⅳ. 커미션 구조(표준율)]
 
 구간(만원)   디자이너   실장   부원장   대표원장   대표
@@ -2273,6 +2190,25 @@ async def salon_analysis(
 6️⃣ 정액권 잔액 리스크 분석 (자동소멸 1년, 균등 소진 가정)
 7️⃣ 다음달·분기 KPI 예측 + “디자이너 +1명 / 고객 +50명” 시나리오
 
+[Ⅱ. KPI 목표]
+• 목표 매출: 100,000,000원
+• 목표 순이익: 40,000,000원
+• 목표 소진률: 100%
+• 목표 인건비율: 30%
+• 목표 객단가상승률: 5%
+
+[Ⅲ. KPI 달성률 자동 계산 규칙]
+    • 매출달성률(%) = (실현매출 ÷ 목표매출) × 100
+    • 순이익달성률(%) = (순이익 ÷ 목표순이익) × 100
+    • 인건비율(%) = (인건비 ÷ 실현매출) × 100
+    • 소진률(%) = (정액권차감 ÷ 정액권결제) × 100
+    • 객단가상승률(%) = (현재 객단가 ÷ 이전 객단가 − 1) × 100
+
+[Ⅳ. 분석 요청]
+1️⃣ KPI 달성률 자동 계산 및 평가
+2️⃣ 달성률이 80% 미만인 항목은 “개선필요”로 표시
+3️⃣ 달성률이 120% 이상인 항목은 “과잉 또는 이상치”로 주석
+4️⃣ 총평가 항목: “우수 / 보통 / 개선필요” 중 하나로 요약
 ⸻
 
 [Ⅶ. 출력 형식]
@@ -2291,9 +2227,14 @@ async def salon_analysis(
     • 결제비중 리스크 / 커미션 효율성 / 현금흐름 안정성
     • 개선 액션 3가지
 
-🎯 KPI
-구분    매출    순이익    소진률    인건비율    객단가상승률
-목표
+🎯 KPI 달성 분석
+| 항목 | 목표 | 실제 | 달성률 | 평가 |
+|------|------|------|--------|------|
+| 매출 | 100,000,000 | 97,710,025 | 97.7% | 보통 |
+| 순이익 | 40,000,000 | 37,916,080 | 94.8% | 보통 |
+| 소진률 | 100% | 100.3% | 100.3% | 우수 |
+| 인건비율 | 30% | 29.1% | 97.0% | 우수 |
+
 
 ⸻
 
@@ -2301,24 +2242,20 @@ async def salon_analysis(
 """
 
     # ==============================
-    # 7️⃣ GPT 호출
+    # 6️⃣ GPT 호출
     # ==============================
     resp = openai_client.chat.completions.create(
         model="gpt-4o",
-        temperature=0.3,
+        temperature=0.2,
         messages=[
-            {
-                "role": "system",
-                "content": "당신은 미용실 재무 분석 전문가입니다. 수식과 회계 논리에 근거해 실무형 리포트를 작성하세요.",
-            },
+            {"role": "system", "content": "당신은 미용실 재무 분석 전문가입니다."},
             {"role": "user", "content": prompt},
         ],
     )
-
     analysis_text = resp.choices[0].message.content
 
     # ==============================
-    # 8️⃣ 결과 저장
+    # 7️⃣ DB 저장 및 반환
     # ==============================
     title_date = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
     title = f"{branch} / {title_date} / {period_text} 분석"
@@ -2337,20 +2274,18 @@ async def salon_analysis(
         print("[GPT 분석 저장 실패]", e)
         analysis_id = None
 
-    # ==============================
-    # 9️⃣ 응답
-    # ==============================
     return {
         "analysis": analysis_text,
         "analysis_id": analysis_id,
         "title": title,
         "fixed_expense": fixed_expense,
         "variable_expense": variable_expense,
-        "bank_inflow": bank_inflow,
-        "cash_balance": cash_balance,
         "bep_list": designer_bep_list,
         "avg_bep": avg_bep,
         "avg_ach_rate": avg_ach_rate,
+        "realized_sales": realized_sales,
+        "net_profit": net_profit,
+        "labor_cost": labor_cost,
     }
 
 
