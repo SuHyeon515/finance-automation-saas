@@ -2087,6 +2087,9 @@ async def salon_analysis(
     visitors_total = safe_sum("visitors")
     pass_paid_total = safe_sum("pass_paid")
     pass_used_total = safe_sum("pass_used")
+    staff_summary = "\n".join(
+        [f"{m}: 디자이너 {v['디자이너']}명, 인턴 {v['인턴']}명" for m, v in monthly_staff_stats.items()]
+    ) if monthly_staff_stats else "데이터 없음"
 
     # ==============================
     # 6️⃣ GPT 프롬프트 생성 (BEP/달성률 포함)
