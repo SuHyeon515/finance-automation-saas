@@ -1985,7 +1985,7 @@ async def salon_analysis(
     try:
         exp_res = (
             supabase.table("expenses")
-            .select("amount, category, month")
+            .select("amount, category, date")
             .eq("user_id", user_id)
             .eq("branch", branch)
             .gte("date", f"{start_month}-01")
@@ -2029,7 +2029,7 @@ async def salon_analysis(
         num_designers = max(len(designers_only), 1)
 
         for month_data in months:
-            month_label = month_data.get("month") or "기간미상"
+            month_label = (month_data.get("month") or "기간미상")[:7]
 
             # ✅ 해당 월의 실현매출 계산
             monthly_sales = (
@@ -2097,6 +2097,15 @@ async def salon_analysis(
         f"평균 BEP 달성률 {m['avg_bep_achievement']:.1f}%"
         for m in bep_monthly_results
     ])
+    
+    # ==============================
+    # 2️⃣-3️⃣ 디자이너별 BEP 상세 문자열 생성
+    # ==============================
+    bep_info = "\n".join([
+        f"{b['month']} | {b['name']} ({b['rank']}) → 매출 {b['personal_sales']:,.0f}원 / "
+        f"BEP {b['bep']:,.0f}원 (달성률 {b['achievement']:.1f}%, 수익차이 {b['margin']:,.0f}원)"
+        for b in bep_list
+    ]) if bep_list else "디자이너별 BEP 분석 데이터 없음"
 
     # 🎯 BEP 집계 요약 계산
     avg_bep_achievement = 0.0
