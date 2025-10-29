@@ -4,12 +4,16 @@ import { useParams } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 import { API_BASE, apiAuthHeader } from '@/lib/api'
 import Link from 'next/link'
-import ReportPDFButton from '@/components/ReportPDFButton' // ✅ PDF 버튼 불러오기
+import dynamic from 'next/dynamic'
+
+// ✅ PDF 버튼 (SSR 비활성화)
+const ReportPDFButton = dynamic(() => import('@/components/ReportPDFButton'), { ssr: false })
 
 export default function AnalysisDetailPage() {
   const { id } = useParams()
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(false)
+  const reportRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!id) return
@@ -40,35 +44,49 @@ export default function AnalysisDetailPage() {
   if (!data) return <div className="p-6 text-gray-500">데이터 없음</div>
 
   return (
-    <main className="p-6 max-w-4xl mx-auto space-y-6">
+    <main className="p-6 max-w-5xl mx-auto space-y-8 bg-gray-100 min-h-screen">
       <Link href="/analyses" className="text-blue-600 text-sm">
         ← 목록으로 돌아가기
       </Link>
 
-      {/* ✅ 상단 제목 + PDF 버튼 */}
+      {/* ✅ 제목 + PDF 버튼 */}
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-semibold">{data.title}</h1>
-        {/* ReportPDFButton 재사용 */}
+        <h1 className="text-2xl font-bold">{data.title}</h1>
         <ReportPDFButton
-          elementId="analysis-report" // PDF로 변환할 영역 id
+          elementId="analysis-report-container"
           title={data.title || `analysis_${id}`}
         />
       </div>
 
-      <div className="text-gray-500">
+      <div className="text-gray-500 text-sm">
         {data.branch} · {new Date(data.created_at).toLocaleString('ko-KR')}
       </div>
 
-      {/* ✅ PDF 변환 대상 영역 */}
+      {/* ✅ PDF 렌더링 영역 */}
       <div
-        id="analysis-report"
-        className="prose whitespace-pre-wrap bg-white p-6 rounded-lg shadow-sm border"
+        id="analysis-report-container"
+        ref={reportRef}
+        className="bg-white p-8 rounded-xl shadow-sm border space-y-6 leading-relaxed"
       >
-        {data.result}
-      </div>
+        {/* 상단 메타 */}
+        <section className="border-b pb-4">
+          <h2 className="text-xl font-semibold text-gray-800">📊 GPT 분석 결과</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            {data.branch} ({data.period_text || '기간 정보 없음'})
+          </p>
+        </section>
 
-      <div className="text-right text-sm text-gray-400">
-        분석 ID: {data.id}
+        {/* 본문 */}
+        <section className="prose prose-gray max-w-none whitespace-pre-wrap text-gray-800">
+          {data.result}
+        </section>
+
+        {/* 하단 정보 */}
+        <footer className="border-t pt-4 text-right text-xs text-gray-400">
+          분석 ID: {data.id}
+          <br />
+          생성일: {new Date(data.created_at).toLocaleString('ko-KR')}
+        </footer>
       </div>
     </main>
   )

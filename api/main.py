@@ -1984,8 +1984,8 @@ async def salon_analysis(
             .select("amount, category")
             .eq("user_id", user_id)
             .eq("branch", branch)
-            .gte("date", start_month)
-            .lte("date", end_month)
+            .gte("date", f"{start_month}-01")   # ✅ 시작일 수정
+            .lte("date", end_date_str)          # ✅ 종료일 수정
             .execute()
         )
         exp_data = exp_res.data or []
