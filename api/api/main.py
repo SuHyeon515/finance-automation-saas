@@ -2000,6 +2000,32 @@ async def salon_analysis(
     except Exception as e:
         print(f"⚠️ [지출 조회 실패] {e}")
         fixed_expense = variable_expense = 0.0
+        
+    # ==============================
+    # 🌙 평균 계산 보정 (다중 개월 구간 대응)
+    # ==============================
+
+    # 개월 수 계산
+    start_y, start_m = map(int, start_month.split("-"))
+    end_y, end_m = map(int, end_month.split("-"))
+    months_diff = max((end_y - start_y) * 12 + (end_m - start_m) + 1, 1)
+    if months_diff < 1:
+        months_diff = 1  # 최소 1개월 보정
+
+    # 🔹 합계형 → 평균형 지표 변환
+    avg_total_sales = total_sales / months_diff
+    avg_realized_sales = realized_sales / months_diff
+    avg_net_profit = net_profit / months_diff
+    avg_fixed_expense = fixed_expense / months_diff
+    avg_variable_expense = variable_expense / months_diff
+    avg_labor_cost = labor_cost / months_diff
+    avg_pass_paid = pass_paid_total / months_diff
+    avg_pass_used = pass_used_total / months_diff
+    avg_pass_balance = pass_balance_amount / months_diff
+
+    # 🔹 소진률은 평균 비율 그대로 사용
+    avg_pass_usage_rate = pass_usage_rate
+
     # ==============================
     # 2️⃣-2️⃣ 디자이너별 BEP 자동 계산 (인턴 제외)
     # ==============================
@@ -2061,31 +2087,6 @@ async def salon_analysis(
     card_share = (card_sales * 0.8 / commission_net_sales * 100) if commission_net_sales else 0
     pay_share = (pay_sales * 0.85 / commission_net_sales * 100) if commission_net_sales else 0
     cashacct_share = (((cash_sales + account_sales) * 0.8) / commission_net_sales * 100) if commission_net_sales else 0
-    # ==============================
-    # 🌙 평균 계산 보정 (다중 개월 구간 대응)
-    # ==============================
-    from dateutil.relativedelta import relativedelta
-
-    # 개월 수 계산
-    start_y, start_m = map(int, start_month.split("-"))
-    end_y, end_m = map(int, end_month.split("-"))
-    months_diff = max((end_y - start_y) * 12 + (end_m - start_m) + 1, 1)
-    if months_diff < 1:
-        months_diff = 1  # 최소 1개월 보정
-
-    # 🔹 합계형 → 평균형 지표 변환
-    avg_total_sales = total_sales / months_diff
-    avg_realized_sales = realized_sales / months_diff
-    avg_net_profit = net_profit / months_diff
-    avg_fixed_expense = fixed_expense / months_diff
-    avg_variable_expense = variable_expense / months_diff
-    avg_labor_cost = labor_cost / months_diff
-    avg_pass_paid = pass_paid_total / months_diff
-    avg_pass_used = pass_used_total / months_diff
-    avg_pass_balance = pass_balance_amount / months_diff
-
-    # 🔹 소진률은 평균 비율 그대로 사용
-    avg_pass_usage_rate = pass_usage_rate
 
     # ==============================
     # 5️⃣ KPI 자동 계산 (월평균 기준)
