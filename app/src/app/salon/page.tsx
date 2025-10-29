@@ -15,14 +15,17 @@ export default function SalonDataEntryPage() {
     visitors: 0,
     reviews: 0,
     pass_paid: 0,
-    pass_used: 0
+    pass_used: 0,
   })
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(false)
 
-  // 🧾 최근 저장 내역 상태
   const [recentData, setRecentData] = useState<any[]>([])
   const [loadingList, setLoadingList] = useState(false)
+
+  // ✅ 새로 추가
+  const [mergedRows, setMergedRows] = useState<any[]>([]) // 실제 합산된 항목 목록
+  const [mergeCount, setMergeCount] = useState(0)
 
   const totalSales =
     form.card_sales + form.pay_sales + form.cash_sales + form.account_sales
@@ -31,15 +34,23 @@ export default function SalonDataEntryPage() {
   // ✅ 브랜치 목록 로드
   useEffect(() => {
     const loadBranches = async () => {
-      const headers = await apiAuthHeader()
-      const res = await fetch(`${API_BASE}/meta/branches`, { headers, credentials: 'include' })
-      const json = await res.json()
-      setBranches(Array.isArray(json) ? json : [])
+      try {
+        const headers = await apiAuthHeader()
+        const res = await fetch(`${API_BASE}/meta/branches`, {
+          headers,
+          credentials: 'include',
+        })
+        const json = await res.json()
+        setBranches(Array.isArray(json) ? json : [])
+      } catch (err) {
+        console.error('지점 목록 불러오기 실패:', err)
+        setBranches([])
+      }
     }
     loadBranches()
   }, [])
 
-  // ✅ 기존 저장 데이터 자동 불러오기
+  // ✅ 기존 저장 데이터 자동 불러오기 (여러 건 합산 + 세부 목록 표시)
   useEffect(() => {
     const loadExisting = async () => {
       if (!branch || !month) return
@@ -53,7 +64,6 @@ export default function SalonDataEntryPage() {
         .eq('user_id', user.id)
         .eq('branch', branch)
         .eq('month', month)
-        .maybeSingle()
       setLoading(false)
 
       if (error) {
@@ -61,17 +71,32 @@ export default function SalonDataEntryPage() {
         return
       }
 
-      if (data) {
-        setForm({
-          card_sales: data.card_sales || 0,
-          pay_sales: data.pay_sales || 0,
-          cash_sales: data.cash_sales || 0,
-          account_sales: data.account_sales || 0,
-          visitors: data.visitors || 0,
-          reviews: data.reviews || 0,
-          pass_paid: data.pass_paid || 0,
-          pass_used: data.pass_used || 0
-        })
+      if (data && data.length > 0) {
+        const total = data.reduce(
+          (acc, cur) => ({
+            card_sales: acc.card_sales + (cur.card_sales || 0),
+            pay_sales: acc.pay_sales + (cur.pay_sales || 0),
+            cash_sales: acc.cash_sales + (cur.cash_sales || 0),
+            account_sales: acc.account_sales + (cur.account_sales || 0),
+            visitors: acc.visitors + (cur.visitors || 0),
+            reviews: acc.reviews + (cur.reviews || 0),
+            pass_paid: acc.pass_paid + (cur.pass_paid || 0),
+            pass_used: acc.pass_used + (cur.pass_used || 0),
+          }),
+          {
+            card_sales: 0,
+            pay_sales: 0,
+            cash_sales: 0,
+            account_sales: 0,
+            visitors: 0,
+            reviews: 0,
+            pass_paid: 0,
+            pass_used: 0,
+          }
+        )
+        setForm(total)
+        setMergedRows(data) // ✅ 세부 항목 표시용
+        setMergeCount(data.length)
       } else {
         setForm({
           card_sales: 0,
@@ -81,8 +106,10 @@ export default function SalonDataEntryPage() {
           visitors: 0,
           reviews: 0,
           pass_paid: 0,
-          pass_used: 0
+          pass_used: 0,
         })
+        setMergedRows([])
+        setMergeCount(0)
       }
     }
     loadExisting()
@@ -94,17 +121,20 @@ export default function SalonDataEntryPage() {
     const user = (await supabase.auth.getUser()).data.user
     if (!user) return alert('로그인 필요')
 
-        const { error } = await supabase
-        .from('salon_monthly_data')
-        .upsert({
-            user_id: user.id,
-            branch,
-            month,
-            ...form,
-            total_sales: totalSales,
-            pass_balance: passBalance,   // ✅ 추가
-            updated_at: new Date().toISOString()
-        }, { onConflict: 'user_id,branch,month' })
+    const { error } = await supabase
+      .from('salon_monthly_data')
+      .upsert(
+        {
+          user_id: user.id,
+          branch,
+          month,
+          ...form,
+          total_sales: totalSales,
+          pass_balance: passBalance,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,branch,month' }
+      )
 
     if (error) alert('저장 실패: ' + error.message)
     else {
@@ -121,7 +151,9 @@ export default function SalonDataEntryPage() {
     setLoadingList(true)
     const { data, error } = await supabase
       .from('salon_monthly_data')
-      .select('id, branch, month, total_sales, visitors, reviews, pass_paid, pass_used, pass_balance, updated_at')
+      .select(
+        'id, branch, month, card_sales, pay_sales, cash_sales, account_sales, total_sales, visitors, reviews, pass_paid, pass_used, pass_balance, updated_at'
+      )
       .eq('user_id', user.id)
       .order('updated_at', { ascending: false })
       .limit(10)
@@ -133,7 +165,10 @@ export default function SalonDataEntryPage() {
   // 🧾 삭제
   const handleDelete = async (id: string) => {
     if (!confirm('정말 삭제하시겠습니까?')) return
-    const { error } = await supabase.from('salon_monthly_data').delete().eq('id', id)
+    const { error } = await supabase
+      .from('salon_monthly_data')
+      .delete()
+      .eq('id', id)
     if (error) alert('삭제 실패: ' + error.message)
     else {
       alert('삭제 완료!')
@@ -153,12 +188,13 @@ export default function SalonDataEntryPage() {
       visitors: row.visitors || 0,
       reviews: row.reviews || 0,
       pass_paid: row.pass_paid || 0,
-      pass_used: row.pass_used || 0
+      pass_used: row.pass_used || 0,
     })
+    setMergeCount(1)
+    setMergedRows([row])
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  // 초기 리스트 로드
   useEffect(() => {
     loadRecent()
   }, [])
@@ -171,9 +207,15 @@ export default function SalonDataEntryPage() {
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label>지점</label>
-          <select value={branch} onChange={e => setBranch(e.target.value)} className="border rounded w-full p-2">
+          <select
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+            className="border rounded w-full p-2"
+          >
             <option value="">--선택--</option>
-            {branches.map(b => <option key={b}>{b}</option>)}
+            {branches.map((b) => (
+              <option key={b}>{b}</option>
+            ))}
           </select>
         </div>
         <div>
@@ -181,20 +223,60 @@ export default function SalonDataEntryPage() {
           <input
             type="month"
             value={month}
-            onChange={e => setMonth(e.target.value)}
+            onChange={(e) => setMonth(e.target.value)}
             className="border rounded w-full p-2"
           />
         </div>
       </div>
 
-      {loading && <p className="text-gray-500 text-center">⏳ 데이터 불러오는 중...</p>}
+      {loading && (
+        <p className="text-gray-500 text-center">⏳ 데이터 불러오는 중...</p>
+      )}
 
       {/* 매출 입력 */}
       <div className="grid grid-cols-2 gap-4">
-        <div><label>카드매출</label><input type="number" value={form.card_sales} onChange={e => setForm({...form,card_sales:+e.target.value})} className="border rounded w-full p-2" /></div>
-        <div><label>페이매출</label><input type="number" value={form.pay_sales} onChange={e => setForm({...form,pay_sales:+e.target.value})} className="border rounded w-full p-2" /></div>
-        <div><label>현금매출</label><input type="number" value={form.cash_sales} onChange={e => setForm({...form,cash_sales:+e.target.value})} className="border rounded w-full p-2" /></div>
-        <div><label>계좌이체매출</label><input type="number" value={form.account_sales} onChange={e => setForm({...form,account_sales:+e.target.value})} className="border rounded w-full p-2" /></div>
+        <div>
+          <label>카드매출</label>
+          <input
+            type="number"
+            value={form.card_sales}
+            onChange={(e) =>
+              setForm({ ...form, card_sales: +e.target.value })
+            }
+            className="border rounded w-full p-2"
+          />
+        </div>
+        <div>
+          <label>페이매출</label>
+          <input
+            type="number"
+            value={form.pay_sales}
+            onChange={(e) => setForm({ ...form, pay_sales: +e.target.value })}
+            className="border rounded w-full p-2"
+          />
+        </div>
+        <div>
+          <label>현금매출</label>
+          <input
+            type="number"
+            value={form.cash_sales}
+            onChange={(e) =>
+              setForm({ ...form, cash_sales: +e.target.value })
+            }
+            className="border rounded w-full p-2"
+          />
+        </div>
+        <div>
+          <label>계좌이체매출</label>
+          <input
+            type="number"
+            value={form.account_sales}
+            onChange={(e) =>
+              setForm({ ...form, account_sales: +e.target.value })
+            }
+            className="border rounded w-full p-2"
+          />
+        </div>
       </div>
 
       {/* 총매출 */}
@@ -202,15 +284,64 @@ export default function SalonDataEntryPage() {
         <label className="font-semibold">총 매출 합계</label>
         <input
           readOnly
-          value={totalSales.toLocaleString()}
+          value={`${totalSales.toLocaleString()}${
+            mergeCount > 1 ? ` (${mergeCount}건 합산됨)` : ''
+          }`}
           className="border rounded w-full p-2 bg-gray-100 text-right font-semibold"
         />
       </div>
 
+      {/* ✅ 합산된 세부 항목 표시 */}
+      {mergeCount > 1 && mergedRows.length > 0 && (
+        <div className="border rounded p-4 bg-gray-50 mt-3">
+          <h3 className="font-semibold mb-2">📋 합산된 세부 항목 ({mergeCount}건)</h3>
+          <table className="w-full text-sm border border-gray-200">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="p-2 border">No</th>
+                <th className="p-2 border">총매출</th>
+                <th className="p-2 border">정액권 결제</th>
+                <th className="p-2 border">정액권 차감</th>
+                <th className="p-2 border">방문객</th>
+                <th className="p-2 border">리뷰</th>
+              </tr>
+            </thead>
+            <tbody>
+              {mergedRows.map((r, i) => (
+                <tr key={r.id || i}>
+                  <td className="border p-2 text-center">{i + 1}</td>
+                  <td className="border p-2 text-right">{(r.total_sales || 0).toLocaleString()}</td>
+                  <td className="border p-2 text-right">{(r.pass_paid || 0).toLocaleString()}</td>
+                  <td className="border p-2 text-right">{(r.pass_used || 0).toLocaleString()}</td>
+                  <td className="border p-2 text-center">{r.visitors}</td>
+                  <td className="border p-2 text-center">{r.reviews}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* 방문객 / 리뷰 */}
       <div className="grid grid-cols-2 gap-4 pt-4">
-        <div><label>방문객 수</label><input type="number" value={form.visitors} onChange={e => setForm({...form,visitors:+e.target.value})} className="border rounded w-full p-2" /></div>
-        <div><label>리뷰 수</label><input type="number" value={form.reviews} onChange={e => setForm({...form,reviews:+e.target.value})} className="border rounded w-full p-2" /></div>
+        <div>
+          <label>방문객 수</label>
+          <input
+            type="number"
+            value={form.visitors}
+            onChange={(e) => setForm({ ...form, visitors: +e.target.value })}
+            className="border rounded w-full p-2"
+          />
+        </div>
+        <div>
+          <label>리뷰 수</label>
+          <input
+            type="number"
+            value={form.reviews}
+            onChange={(e) => setForm({ ...form, reviews: +e.target.value })}
+            className="border rounded w-full p-2"
+          />
+        </div>
       </div>
 
       {/* 정액권 */}
@@ -219,15 +350,33 @@ export default function SalonDataEntryPage() {
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label>정액권 결제 금액</label>
-            <input type="number" value={form.pass_paid} onChange={e => setForm({...form, pass_paid:+e.target.value})} className="border rounded w-full p-2" />
+            <input
+              type="number"
+              value={form.pass_paid}
+              onChange={(e) =>
+                setForm({ ...form, pass_paid: +e.target.value })
+              }
+              className="border rounded w-full p-2"
+            />
           </div>
           <div>
             <label>정액권 차감 금액(실사용)</label>
-            <input type="number" value={form.pass_used} onChange={e => setForm({...form, pass_used:+e.target.value})} className="border rounded w-full p-2" />
+            <input
+              type="number"
+              value={form.pass_used}
+              onChange={(e) =>
+                setForm({ ...form, pass_used: +e.target.value })
+              }
+              className="border rounded w-full p-2"
+            />
           </div>
           <div>
             <label>정액권 잔액 (자동 계산)</label>
-            <input readOnly value={passBalance.toLocaleString()} className="border rounded w-full p-2 bg-gray-100" />
+            <input
+              readOnly
+              value={passBalance.toLocaleString()}
+              className="border rounded w-full p-2 bg-gray-100"
+            />
           </div>
         </div>
       </div>
@@ -250,7 +399,9 @@ export default function SalonDataEntryPage() {
         {loadingList ? (
           <p className="text-gray-500 text-center">불러오는 중...</p>
         ) : recentData.length === 0 ? (
-          <p className="text-gray-500 text-center">저장된 데이터가 없습니다.</p>
+          <p className="text-gray-500 text-center">
+            저장된 데이터가 없습니다.
+          </p>
         ) : (
           <table className="w-full text-sm border border-gray-200">
             <thead className="bg-gray-100">
@@ -274,17 +425,21 @@ export default function SalonDataEntryPage() {
                 >
                   <td className="border p-2">{row.branch}</td>
                   <td className="border p-2">{row.month}</td>
-                  <td className="border p-2">{(row.total_sales || 0).toLocaleString()}</td>
+                  <td className="border p-2">
+                    {(row.total_sales || 0).toLocaleString()}
+                  </td>
                   <td className="border p-2">{row.visitors}</td>
                   <td className="border p-2">{row.reviews}</td>
-                  <td className="border p-2">{(row.pass_balance || 0).toLocaleString()}</td>
+                  <td className="border p-2">
+                    {(row.pass_balance || 0).toLocaleString()}
+                  </td>
                   <td className="border p-2 text-gray-500 text-xs">
                     {new Date(row.updated_at).toLocaleDateString()}
                   </td>
                   <td className="border p-2">
                     <button
                       onClick={(e) => {
-                        e.stopPropagation() // ✅ 행 클릭과 삭제 분리
+                        e.stopPropagation()
                         handleDelete(row.id)
                       }}
                       className="text-red-600 hover:underline text-xs"
