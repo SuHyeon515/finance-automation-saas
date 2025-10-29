@@ -2005,17 +2005,15 @@ async def salon_analysis(
     # ==============================
     bep_list = []
     if designer_rows:
-        # BEP 계산은 디자이너만 대상 (인턴 제외)
         designers_only = [r for r in designer_rows if "인턴" not in (r.get("rank") or "")]
-
         fixed_per_designer = fixed_expense / max(len(designers_only), 1)
 
         for r in designers_only:
             name = r.get("name")
             rank = r.get("rank", "")
-            commission_rate = 0.38  # 기본값
+            commission_rate = 0.38
 
-            # 직급별 커미션율 자동 반영
+            # 직급별 커미션율 조정
             if "실장" in rank:
                 commission_rate = 0.39
             elif "부원장" in rank:
@@ -2023,21 +2021,31 @@ async def salon_analysis(
             elif "대표" in rank or "원장" in rank:
                 commission_rate = 0.43
 
-            # 손익분기점 계산 (인턴 제외)
+            # 실제 급여
+            salary = float(r.get("total_amount", 0) or 0)
+            # 실제 매출 (salon_monthly_data 중 개인별 분배 데이터 없으면 평균치라도 사용)
+            personal_sales = avg_realized_sales / max(len(designers_only), 1)
+
             bep = fixed_per_designer / (1 - commission_rate)
+            achievement_rate = (personal_sales / bep * 100) if bep > 0 else 0
+            margin = personal_sales - bep
+
             bep_list.append({
                 "name": name,
                 "rank": rank,
                 "commission": commission_rate,
-                "bep": round(bep, 0)
+                "bep": round(bep, 0),
+                "salary": round(salary, 0),
+                "personal_sales": round(personal_sales, 0),
+                "achievement": round(achievement_rate, 1),
+                "margin": round(margin, 0),
             })
-    else:
-        bep_list = []
 
     bep_info = "\n".join([
-        f"{b['name']} ({b['rank']}) → 커미션 {b['commission']*100:.1f}%, BEP 약 {b['bep']:,.0f}원"
+        f"{b['name']} ({b['rank']}) → 매출 {b['personal_sales']:,.0f}원 / BEP {b['bep']:,.0f}원 "
+        f"(달성률 {b['achievement']:.1f}%, 수익차이 {b['margin']:,.0f}원)"
         for b in bep_list
-    ]) if bep_list else "디자이너별 BEP 산출 불가 (데이터 부족)"
+    ]) if bep_list else "디자이너별 BEP 분석 불가 (데이터 부족)"
 
     labor_cost = sum(float(r.get("total_amount", 0) or 0) for r in designer_rows)
     net_profit = realized_sales - (fixed_expense + variable_expense + labor_cost)
@@ -2083,12 +2091,14 @@ async def salon_analysis(
     # 5️⃣ KPI 자동 계산 (월평균 기준)
     # ==============================
 
-    # 🎯 KPI 목표값 (월 기준)
-    target_sales = 100_000_000
-    target_profit = 40_000_000
-    target_usage_rate = 100
-    target_labor_rate = 30
-    target_growth_rate = 5
+    # 최근 실적 기반 자동 목표 설정
+    growth_buffer = 0.15  # 최근 실적 대비 +15% 향상 목표
+
+    target_sales = avg_realized_sales * (1 + growth_buffer)
+    target_profit = avg_net_profit * (1 + growth_buffer)
+    target_usage_rate = min(avg_pass_usage_rate * (1 + 0.05), 100)  # 소진률은 최대 100%
+    target_labor_rate = max((avg_labor_cost / avg_realized_sales * 100) * 0.9, 20)  # 효율 개선 목표
+    target_growth_rate = ((target_sales - avg_realized_sales) / avg_realized_sales * 100)
 
     # 📊 실제값 (월평균 기준)
     actual_sales = avg_realized_sales
@@ -2231,11 +2241,17 @@ async def salon_analysis(
     • 결제비중 리스크 / 커미션 효율성 / 현금흐름 안정성  
     • 인건비 구조 최적화 / KPI 개선 3단계 전략  
 
-    🎯 KPI 테이블
-    구분	매출	순이익	소진률	인건비율	객단가상승률
-    목표	{target_sales:,.0f}	{target_profit:,.0f}	{target_usage_rate:.1f}%	{target_labor_rate:.1f}%	{target_growth_rate:.1f}%
-    실제	{actual_sales:,.0f}	{actual_profit:,.0f}	{actual_usage_rate:.1f}%	{actual_labor_rate:.1f}%	{actual_growth_rate:.1f}%
-    달성률	{kpi_sales_rate:.1f}%	{kpi_profit_rate:.1f}%	{kpi_usage_rate:.1f}%	{kpi_labor_eff:.1f}%	{kpi_growth_rate:.1f}%
+    [Ⅵ. 자동 KPI 산출(월평균 기준)]
+    구분	목표	실제	달성률
+    매출	{target_sales:,.0f}	{actual_sales:,.0f}	{kpi_sales_rate:.1f}%
+    순이익	{target_profit:,.0f}	{actual_profit:,.0f}	{kpi_profit_rate:.1f}%
+    소진률	{target_usage_rate:.1f}%	{actual_usage_rate:.1f}%	{kpi_usage_rate:.1f}%
+    인건비율	{target_labor_rate:.1f}%	{actual_labor_rate:.1f}%	{kpi_labor_eff:.1f}%
+    객단가상승률	{target_growth_rate:.1f}%	{actual_growth_rate:.1f}%	{kpi_growth_rate:.1f}%
+
+    ───────────────────────────────
+    [Ⅷ. 디자이너별 BEP 달성률 및 순이익 분석]
+    {bep_info}
 
     ───────────────────────────────
     ✳️ 지시사항:
