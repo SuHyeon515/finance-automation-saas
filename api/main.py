@@ -1907,8 +1907,7 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         print("⚠️ 통장 잔액 조회 실패:", e)
         raise HTTPException(status_code=500, detail=str(e))
     
-
-# === GPT 분석 (💈 제이가빈 고정 템플릿 + 포맷 유지 완성판 + 월별 BEP 반영) ===
+# === GPT 분석 (💈 제이가빈 고정 템플릿 + 포맷 유지 완성판 + 정확한 월별 BEP 반영) ===
 @app.post('/gpt/salon-analysis')
 async def salon_analysis(
     body: dict = Body(...),
@@ -1986,7 +1985,7 @@ async def salon_analysis(
     try:
         exp_res = (
             supabase.table("expenses")
-            .select("amount, category")
+            .select("amount, category, month")
             .eq("user_id", user_id)
             .eq("branch", branch)
             .gte("date", f"{start_month}-01")
@@ -1994,11 +1993,13 @@ async def salon_analysis(
             .execute()
         )
         exp_data = exp_res.data or []
-        fixed_expense = sum(float(x["amount"]) for x in exp_data if x["category"] == "고정")
-        variable_expense = sum(float(x["amount"]) for x in exp_data if x["category"] == "변동")
     except Exception as e:
         print(f"⚠️ [지출 조회 실패] {e}")
-        fixed_expense = variable_expense = 0.0
+        exp_data = []
+
+    # 전체 지출 합계
+    fixed_expense = sum(float(x["amount"]) for x in exp_data if x["category"] == "고정")
+    variable_expense = sum(float(x["amount"]) for x in exp_data if x["category"] == "변동")
 
     labor_cost = sum(float(r.get("total_amount", 0) or 0) for r in designer_rows)
     net_profit = realized_sales - (fixed_expense + variable_expense + labor_cost)
@@ -2012,22 +2013,16 @@ async def salon_analysis(
     end_y, end_m = map(int, end_month.split("-"))
     months_diff = max((end_y - start_y) * 12 + (end_m - start_m) + 1, 1)
 
-    avg_total_sales = total_sales / months_diff
     avg_realized_sales = realized_sales / months_diff
     avg_net_profit = net_profit / months_diff
-    avg_fixed_expense = fixed_expense / months_diff
-    avg_variable_expense = variable_expense / months_diff
     avg_labor_cost = labor_cost / months_diff
-    avg_pass_paid = pass_paid_total / months_diff
-    avg_pass_used = pass_used_total / months_diff
-    avg_pass_balance = pass_balance_amount / months_diff
     avg_pass_usage_rate = pass_usage_rate
 
     # ==============================
-    # 🔄 2️⃣-2️⃣ 월별 BEP 자동 계산 (인턴 제외)
+    # 🔄 2️⃣-2️⃣ 월별 BEP 자동 계산 (정확한 개별 계산)
     # ==============================
     bep_list = []
-    bep_monthly_list = []
+    bep_monthly_results = []
 
     if designer_rows and months:
         designers_only = [r for r in designer_rows if "인턴" not in (r.get("rank") or "")]
@@ -2035,6 +2030,8 @@ async def salon_analysis(
 
         for month_data in months:
             month_label = month_data.get("month") or "기간미상"
+
+            # ✅ 해당 월의 실현매출 계산
             monthly_sales = (
                 (float(month_data.get("card_sales", 0)) +
                  float(month_data.get("pay_sales", 0)) +
@@ -2044,8 +2041,21 @@ async def salon_analysis(
                 + float(month_data.get("pass_used", 0))
             )
 
-            fixed_per_designer = fixed_expense / num_designers
-            monthly_results = []
+            # ✅ 해당 월의 실제 지출 계산 (date 필드에서 월 추출)
+            month_exp_fixed = sum(
+                float(x["amount"]) for x in exp_data
+                if datetime.strptime(x.get("date")[:7], "%Y-%m") == datetime.strptime(month_label, "%Y-%m") and x["category"] == "고정"
+            )
+            month_exp_var = sum(
+                float(x["amount"]) for x in exp_data
+                if datetime.strptime(x.get("date")[:7], "%Y-%m") == datetime.strptime(month_label, "%Y-%m") and x["category"] == "변동"
+            )
+            month_labor = sum(float(r.get("total_amount", 0) or 0) for r in designer_rows if r.get("month") == month_label)
+
+            monthly_profit = monthly_sales - (month_exp_fixed + month_exp_var + month_labor)
+
+            fixed_per_designer = month_exp_fixed / num_designers if month_exp_fixed else (fixed_expense / months_diff) / num_designers
+            monthly_bep_data = []
 
             for r in designers_only:
                 name = r.get("name")
@@ -2063,7 +2073,7 @@ async def salon_analysis(
                 achievement_rate = (personal_sales / bep * 100) if bep > 0 else 0
                 margin = personal_sales - bep
 
-                monthly_results.append({
+                monthly_bep_data.append({
                     "month": month_label,
                     "name": name,
                     "rank": rank,
@@ -2072,19 +2082,21 @@ async def salon_analysis(
                     "achievement": round(achievement_rate, 1),
                     "margin": round(margin, 0),
                 })
-                bep_list.append(monthly_results[-1])
+                bep_list.append(monthly_bep_data[-1])
 
-            bep_monthly_list.append({
+            avg_monthly_achievement = sum([b["achievement"] for b in monthly_bep_data]) / len(monthly_bep_data)
+            bep_monthly_results.append({
                 "month": month_label,
-                "monthly_sales": round(monthly_sales, 0),
-                "bep_results": monthly_results,
+                "realized_sales": round(monthly_sales, 0),
+                "net_profit": round(monthly_profit, 0),
+                "avg_bep_achievement": round(avg_monthly_achievement, 1),
             })
 
-    bep_info = "\n".join([
-        f"{b['month']} - {b['name']}({b['rank']}) → 매출 {b['personal_sales']:,.0f}원 / BEP {b['bep']:,.0f}원 "
-        f"(달성률 {b['achievement']:.1f}%, 차이 {b['margin']:,.0f}원)"
-        for b in bep_list
-    ]) if bep_list else "디자이너별 BEP 분석 불가 (데이터 부족)"
+    bep_monthly_text = "\n".join([
+        f"{m['month']}월 → 실현매출 {m['realized_sales']:,.0f}원 / 순이익 {m['net_profit']:,.0f}원 / "
+        f"평균 BEP 달성률 {m['avg_bep_achievement']:.1f}%"
+        for m in bep_monthly_results
+    ])
 
     # 🎯 BEP 집계 요약 계산
     avg_bep_achievement = 0.0
@@ -2106,6 +2118,7 @@ async def salon_analysis(
         f"BEP 초과 달성 인원 {bep_over_count}명 / 미달 인원 {bep_under_count}명, "
         f"총 초과이익 합계 {int(total_margin):,}원"
     )
+
 
     # ==============================
     # 3️⃣ 결제 비중 및 커미션 반영 순매출 계산
@@ -2237,12 +2250,15 @@ async def salon_analysis(
 [Ⅶ. 결제방식별 순매출 비중]  
 • 카드: {card_share:.1f}% / 페이: {pay_share:.1f}% / 현금·계좌: {cashacct_share:.1f}%  
 
+[Ⅷ. 월별 실현매출 및 BEP 분석 요약]
+{bep_monthly_text}
+
 ───────────────────────────────  
-[Ⅷ. 디자이너별 BEP 분석 (개별 수치)]  
+[Ⅸ. 디자이너별 BEP 상세 분석]
 {bep_info}
 
 ───────────────────────────────  
-[Ⅸ. 디자이너 손익 요약 (집계 데이터)]  
+[Ⅹ. 디자이너 손익 요약 (집계 데이터)]
 {bep_summary}  
 
 ⚠️ 주의: 위 BEP 수치 및 달성률은 실제 계산 결과입니다.  
