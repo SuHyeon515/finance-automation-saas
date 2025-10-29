@@ -2057,8 +2057,11 @@ async def salon_analysis(
 
             monthly_profit = monthly_sales - (month_exp_fixed + month_exp_var + month_labor)
 
-            fixed_per_designer = month_exp_fixed / num_designers if month_exp_fixed else (fixed_expense / months_diff) / num_designers
-            monthly_bep_data = []
+            # 월별 매출 비중 기반으로 고정비를 가중 분배 (월별 BEP 차별화)
+            if fixed_expense > 0 and realized_sales > 0:
+                fixed_per_designer = (fixed_expense * (monthly_sales / realized_sales)) / num_designers
+            else:
+                fixed_per_designer = (fixed_expense / months_diff) / num_designers
 
             for r in designers_only:
                 name = r.get("name")
