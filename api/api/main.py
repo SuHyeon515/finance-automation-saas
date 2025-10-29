@@ -2002,6 +2002,42 @@ async def salon_analysis(
     except Exception as e:
         print(f"⚠️ [지출 조회 실패] {e}")
         fixed_expense = variable_expense = 0.0
+    # ==============================
+    # 2️⃣-2️⃣ 디자이너별 BEP 자동 계산
+    # ==============================
+    bep_list = []
+    if designer_rows:
+        fixed_per_designer = fixed_expense / max(len(designer_rows), 1)
+        intern_cost_share = (intern_count * 1000000) / max(len(designer_rows), 1)  # 인턴 1인당 월 100만 가정
+
+        for r in designer_rows:
+            name = r.get("name")
+            rank = r.get("rank", "")
+            commission_rate = 0.38  # 기본값
+
+            # 직급별 커미션율 자동 반영
+            if "실장" in rank:
+                commission_rate = 0.39
+            elif "부원장" in rank:
+                commission_rate = 0.40
+            elif "대표" in rank or "원장" in rank:
+                commission_rate = 0.43
+
+            # 손익분기점 계산
+            bep = (fixed_per_designer + intern_cost_share) / (1 - commission_rate)
+            bep_list.append({
+                "name": name,
+                "rank": rank,
+                "commission": commission_rate,
+                "bep": round(bep, 0)
+            })
+    else:
+        bep_list = []
+
+    bep_info = "\n".join([
+        f"{b['name']} ({b['rank']}) → 커미션 {b['commission']*100:.1f}%, BEP 약 {b['bep']:,.0f}원"
+        for b in bep_list
+    ]) if bep_list else "디자이너별 BEP 산출 불가 (데이터 부족)"
 
     labor_cost = sum(float(r.get("total_amount", 0) or 0) for r in designer_rows)
     net_profit = realized_sales - (fixed_expense + variable_expense + labor_cost)
@@ -2019,104 +2055,94 @@ async def salon_analysis(
     cashacct_share = (((cash_sales + account_sales) * 0.8) / commission_net_sales * 100) if commission_net_sales else 0
 
     # ==============================
-    # 4️⃣ 💈 제이가빈 템플릿 완성
+    # 5️⃣ KPI 자동 계산 추가
     # ==============================
+
+    # 🎯 KPI 목표값 (기준)
+    target_sales = 100_000_000
+    target_profit = 40_000_000
+    target_usage_rate = 100
+    target_labor_rate = 30
+    target_growth_rate = 5
+
+    # 📊 실제값 (백엔드 계산된 값 기반)
+    actual_sales = realized_sales
+    actual_profit = net_profit
+    actual_usage_rate = pass_usage_rate
+    actual_labor_rate = (labor_cost / realized_sales * 100) if realized_sales else 0
+    actual_growth_rate = ((actual_sales - target_sales) / target_sales * 100)
+
+    # 🎯 KPI 달성률 자동 계산
+    kpi_sales_rate = (actual_sales / target_sales * 100) if target_sales else 0
+    kpi_profit_rate = (actual_profit / target_profit * 100) if target_profit else 0
+    kpi_usage_rate = (actual_usage_rate / target_usage_rate * 100) if target_usage_rate else 0
+    kpi_labor_eff = (target_labor_rate / actual_labor_rate * 100) if actual_labor_rate else 0
+    kpi_growth_rate = (actual_growth_rate + 100)
+
+    # 💾 GPT 프롬프트에 자동 KPI 포함
     prompt = f"""
-💈 제이가빈 재무분석 프롬프트 (최신 정정 버전)
+    💈 제이가빈 재무분석 프롬프트 (자동 KPI 반영 버전)
 
-당신은 미용실 전문 재무 분석가 AI입니다.
-입력된 데이터를 기반으로 {branch}의 ‘실현 매출(Realized Revenue)’ 중심 손익분석,
-디자이너별 BEP, 결제방식별 순매출 구조, 미래 리스크, KPI 예측을 수행하십시오.
-모든 금액은 원(₩) 단위입니다.
+    당신은 미용실 전문 재무 분석가 AI입니다.
+    입력된 데이터를 기반으로 {branch}의 ‘실현 매출(Realized Revenue)’ 중심 손익분석,
+    디자이너별 BEP, 결제방식별 순매출 구조, 미래 리스크, KPI 예측을 수행하십시오.
+    모든 금액은 원(₩) 단위입니다.
 
-⸻
+    ⸻
 
-[Ⅰ. 지점 기본정보]
-• 지점명: {branch}
-• 운영형태: 미용실 (시술 + 클리닉)
-• 디자이너(이름/직급): {designer_info}
-• 인턴 수: {intern_count}
-• 분석기간: {start_month} ~ {end_month}
+    [Ⅰ. 지점 기본정보]
+    • 지점명: {branch}
+    • 운영형태: 미용실 (시술 + 클리닉)
+    • 디자이너(이름/직급): {designer_info}
+    • 인턴 수: {intern_count}
+    • 분석기간: {start_month} ~ {end_month}
 
-⸻
+    ⸻
 
-[Ⅱ. 매출 입력(숫자만)]
-• 총매출(기간 합계): {total_sales:,.0f}
-• 정액권 결제총액(선결제): {pass_paid_total:,.0f}
-• 정액권 차감액(실사용): {pass_used_total:,.0f}
-• 페이매출(기간 합계): {pay_sales:,.0f}
-• 카드매출: {card_sales:,.0f}
-• 계좌이체매출: {account_sales:,.0f}
-• 방문고객(기간 합계): {visitors_total:,}
+    [Ⅱ. 주요 실적 요약]
+    • 총매출(기간 합계): {total_sales:,.0f}원
+    • 실현매출: {realized_sales:,.0f}원
+    • 순이익: {net_profit:,.0f}원
+    • 인건비: {labor_cost:,.0f}원 (비율 {actual_labor_rate:.1f}%)
+    • 정액권 소진률: {pass_usage_rate:.1f}%
+    • 정액권 잔액 리스크: {pass_balance_amount:,.0f}원
 
-⸻
+    ⸻
 
-[Ⅲ. 지출 입력(숫자만)]
-• 고정지출(기간 합계): {fixed_expense:,.0f}
-• 변동지출(기간 합계): {variable_expense:,.0f}
+    [Ⅲ. 자동 KPI 산출]
+    구분\t목표\t실제\t달성률
+    매출\t{target_sales:,.0f}\t{actual_sales:,.0f}\t{kpi_sales_rate:.1f}%
+    순이익\t{target_profit:,.0f}\t{actual_profit:,.0f}\t{kpi_profit_rate:.1f}%
+    소진률\t{target_usage_rate:.1f}%\t{actual_usage_rate:.1f}%\t{kpi_usage_rate:.1f}%
+    인건비율\t{target_labor_rate:.1f}%\t{actual_labor_rate:.1f}%\t{kpi_labor_eff:.1f}%
+    객단가상승률\t{target_growth_rate:.1f}%\t{actual_growth_rate:.1f}%\t{kpi_growth_rate:.1f}%
 
-⸻
+    ⸻
 
-[Ⅳ. 커미션 구조(표준율)]
-구간(만원)\t디자이너\t실장\t부원장\t대표원장\t대표
-1000↓\t36%\t37%\t38%\t43%\t43%
-1000~1300\t37%\t38%\t39%\t43%\t43%
-1300~1600\t38%\t39%\t40%\t43%\t43%
-1600~2000\t39%\t40%\t41%\t43%\t43%
-2000~2300\t40%\t41%\t42%\t43%\t43%
-2300~2600\t41%\t41%\t42%\t43%\t43%
-2600↑\t42%\t42%\t44%\t43%\t43%
+    [Ⅳ. 결제방식별 순매출 비중]
+    • 카드: {card_share:.1f}% / 페이: {pay_share:.1f}% / 현금·계좌: {cashacct_share:.1f}%
 
-⸻
+    ⸻
+    
+    [Ⅵ. 디자이너별 BEP 분석]
+    {bep_info}
 
-[Ⅴ. 자동 계산 규칙(입력 금지 항목)]
-• 정액권 잔액 = {pass_balance_amount:,.0f}원
-• 소진률(%) = {pass_usage_rate:.1f}%
-• 실현매출 = (총매출 − 정액권_결제) + 정액권_차감 = {realized_sales:,.0f}원
-• 순이익(추정) = {net_profit:,.0f}원
-• 인건비율(%) = {(labor_cost / realized_sales * 100 if realized_sales else 0):.1f}%
+    ⸻
+    [Ⅴ. 분석 요청]
+    1️⃣ 결제방식별 순매출 구조 분석
+    2️⃣ 실현매출 기준 손익분석
+    3️⃣ 커미션 구조 효과
+    4️⃣ 디자이너별 BEP
+    5️⃣ 정액권 리스크
+    6️⃣ KPI 및 달성률 기반 개선방안
 
-⸻
+    ⸻
 
-🧮 결제 방식별 커미션 기준 순매출 비중
-• 카드: {card_share:.1f}% / 페이: {pay_share:.1f}% / 현금·계좌: {cashacct_share:.1f}%
-
-⸻
-
-[Ⅵ. 분석 요청]
-1️⃣ 결제방식별 순매출 구조 분석
-2️⃣ 실현매출 기준 손익분석
-3️⃣ 커미션 구조 효과
-4️⃣ 디자이너별 BEP
-5️⃣ 정액권 리스크
-6️⃣ KPI 예측
-
-⸻
-
-[Ⅶ. 출력 형식]
-📈 요약
-• 실현 수익률: XX%
-• 회계 기준 수익률: XX%
-• 격차(정상화−회계): △X.X%p
-• 결제 구조: 페이 {pay_share:.1f}% / 카드 {card_share:.1f}% / 현금·계좌 {cashacct_share:.1f}%
-• 정액권 비중(판매/실현): XX% / XX%
-• 소진률: {pass_usage_rate:.1f}%
-• 잔액 리스크: {pass_balance_amount:,.0f}원
-• 커미션 반영 실제 순이익: {net_profit:,.0f}원
-
-💡 인사이트
-• 결제비중 리스크 / 커미션 효율성 / 현금흐름 안정성
-• 개선 액션 3가지
-
-🎯 KPI
-구분\t매출\t순이익\t소진률\t인건비율\t객단가상승률
-목표\t100,000,000\t40,000,000\t100%\t30%\t5%
-
-(커미션 구조, 수익률, BEP, 실현매출 모두 최신 규칙으로 자동 반영)
-"""
+    ✳️ 주의: 보고서는 최소 800자 이상 작성하며, 각 항목별 원인과 개선방안을 반드시 기술하시오.
+    """
 
     # ==============================
-    # 5️⃣ GPT 호출 (형식 유지 명령)
+    # 6️⃣ GPT 호출 (형식 + 완전 채움 명령 유지)
     # ==============================
     resp = openai_client.chat.completions.create(
         model="gpt-4o",
@@ -2125,9 +2151,10 @@ async def salon_analysis(
             {
                 "role": "system",
                 "content": (
-                    "당신은 미용실 재무 분석 전문가입니다. "
-                    "아래 템플릿 형식을 절대 변경하지 말고, 문단/표/제목 구성을 그대로 유지하여 "
-                    "해당 항목에 데이터를 채워 완성된 보고서를 작성하십시오."
+                    "당신은 미용실 전문 재무 분석가이자 KPI 경영 컨설턴트입니다. "
+                    "아래 템플릿을 변경하지 말고, 모든 섹션과 표를 채워 완전한 보고서를 작성하십시오. "
+                    "실제 데이터 기반으로 KPI 달성률을 해석하고, 원인·대응방안을 수치 중심으로 제시하십시오. "
+                    "모든 금액은 원(₩), 비율은 %, 차이는 p 단위로 표시하고, 문단은 반드시 3개 이상으로 구성하십시오."
                 ),
             },
             {"role": "user", "content": prompt},
