@@ -2170,30 +2170,40 @@ async def salon_analysis(
     """
 
     # ==============================
-    # 6️⃣ GPT 호출 (형식 + 완전 채움 명령 유지)
+    # 6️⃣ GPT 호출 (형식 + 완전 채움 명령 유지 + 예외 처리 추가)
     # ==============================
-    resp = openai_client.chat.completions.create(
-        model="gpt-4o",
-        temperature=0.2,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "당신은 미용실 전문 재무 분석가이자 KPI 경영 컨설턴트입니다. "
-                    "아래 템플릿을 변경하지 말고, 모든 섹션과 표를 채워 완전한 보고서를 작성하십시오. "
-                    "실제 데이터 기반으로 KPI 달성률을 해석하고, 원인·대응방안을 수치 중심으로 제시하십시오. "
-                    "모든 금액은 원(₩), 비율은 %, 차이는 p 단위로 표시하고, 문단은 반드시 3개 이상으로 구성하십시오."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-    )
-    analysis_text = resp.choices[0].message.content
+    try:
+        resp = openai_client.chat.completions.create(
+            model="gpt-4o",
+            temperature=0.2,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "당신은 미용실 전문 재무 분석가이자 KPI 경영 컨설턴트입니다. "
+                        "아래 템플릿을 변경하지 말고, 모든 섹션과 표를 채워 완전한 보고서를 작성하십시오. "
+                        "실제 데이터 기반으로 KPI 달성률을 해석하고, 원인·대응방안을 수치 중심으로 제시하십시오. "
+                        "모든 금액은 원(₩), 비율은 %, 차이는 p 단위로 표시하고, 문단은 반드시 3개 이상으로 구성하십시오."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            timeout=120  # ⏱️ 네트워크 타임아웃(초)
+        )
+
+        # ✅ 응답 구조 안전 검사
+        if not resp or not resp.choices or not resp.choices[0].message.content:
+            raise ValueError("GPT 응답이 비어 있습니다.")
+
+        analysis_text = resp.choices[0].message.content
+
+    except Exception as e:
+        print("❌ [GPT 호출 실패]", e)
+        raise HTTPException(status_code=500, detail=f"GPT 분석 요청 실패: {e}")
 
     # ==============================
     # 6️⃣ 결과 저장 및 반환
     # ==============================
-    title_date = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
     title = f"{branch} / {title_date} / {start_month}~{end_month} 분석"
 
     try:
@@ -2205,7 +2215,7 @@ async def salon_analysis(
             'result': analysis_text,
             'created_at': datetime.now(timezone.utc).isoformat(),
         }).execute()
-        analysis_id = ins.data[0]['id'] if ins.data else None
+        analysis_id = (ins.data[0]['id'] if ins.data and len(ins.data) > 0 else None)
     except Exception as e:
         print("[GPT 분석 저장 실패]", e)
         analysis_id = None
