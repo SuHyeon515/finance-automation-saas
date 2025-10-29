@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { API_BASE, apiAuthHeader } from '@/lib/api'
 import { supabase } from '@/lib/supabaseClient'
 
@@ -26,7 +26,7 @@ type MonthBlock = {
   salaries: SalaryItem[]
   fixed_expense: number
   variable_expense: number
-  bank_inflow: number // ✅ 추가
+  bank_inflow: number
 }
 
 export default function GPTSalonAnalysisPage() {
@@ -36,12 +36,18 @@ export default function GPTSalonAnalysisPage() {
   const [endMonth, setEndMonth] = useState('')
   const [monthBlocks, setMonthBlocks] = useState<MonthBlock[]>([])
   const [openMonths, setOpenMonths] = useState<Record<string, boolean>>({})
-  const [bankInflowTotal, setBankInflowTotal] = useState(0)
   const [cashBalance, setCashBalance] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // 전체 정액권 / 지출 합계
+  // ✅ GPT 분석 관련 state
+  const [result, setResult] = useState('')
+  const [title, setTitle] = useState('')
+  const [analyzing, setAnalyzing] = useState(false)
+  const [analysisId, setAnalysisId] = useState<string | null>(null)
+  const resultRef = useRef<HTMLDivElement>(null)
+
+  // 전체 정액권 / 지출 / 유입 합계
   const totalPassPaid = monthBlocks.reduce((s, b) => s + (b.pass_paid || 0), 0)
   const totalPassUsed = monthBlocks.reduce((s, b) => s + (b.pass_used || 0), 0)
   const totalPassBalance = totalPassPaid - totalPassUsed
@@ -110,7 +116,7 @@ export default function GPTSalonAnalysisPage() {
           .gte('month', startMonth)
           .lte('month', endMonth)
 
-        const salaryByMonth: Record<string, { designers_count: number; interns_count: number; advisors_count: number; salaries: SalaryItem[] }> = {}
+        const salaryByMonth: Record<string, any> = {}
         salaryData?.forEach((r) => {
           const m = r.month
           if (!salaryByMonth[m]) {
@@ -120,14 +126,10 @@ export default function GPTSalonAnalysisPage() {
           if (/디자이너|실장|부원장|대표원장|대표/.test(rank)) salaryByMonth[m].designers_count++
           else if (/인턴/.test(rank)) salaryByMonth[m].interns_count++
           else if (/바이저|매니저/.test(rank)) salaryByMonth[m].advisors_count++
-          salaryByMonth[m].salaries.push({
-            name: r.name,
-            rank: r.rank,
-            total_amount: r.total_amount,
-          })
+          salaryByMonth[m].salaries.push(r)
         })
 
-        // 4️⃣ 월별 사업자 유입 계산 (내수금/기타 제외)
+        // 4️⃣ 월별 사업자 유입 계산
         const inflowByMonth: Record<string, number> = {}
         for (const b of baseMonths) {
           const inflowRes = await fetch(`${API_BASE}/transactions/income-filtered`, {
@@ -140,21 +142,17 @@ export default function GPTSalonAnalysisPage() {
           inflowByMonth[b.month] = inflowJson.bank_inflow || 0
         }
 
-        // 5️⃣ 병합
+        // 병합
         const merged = baseMonths.map((b) => ({
           ...b,
           fixed_expense: expMap[b.month]?.fixed_expense || 0,
           variable_expense: expMap[b.month]?.variable_expense || 0,
-          designers_count: salaryByMonth[b.month]?.designers_count || 0,
-          interns_count: salaryByMonth[b.month]?.interns_count || 0,
-          advisors_count: salaryByMonth[b.month]?.advisors_count || 0,
-          salaries: salaryByMonth[b.month]?.salaries || [],
-          bank_inflow: inflowByMonth[b.month] || 0, // ✅ 추가
+          ...salaryByMonth[b.month],
+          bank_inflow: inflowByMonth[b.month] || 0,
         }))
 
         setMonthBlocks(merged)
       } catch (err: any) {
-        console.error('❌ fetch error:', err)
         setError(err.message)
       } finally {
         setLoading(false)
@@ -164,7 +162,7 @@ export default function GPTSalonAnalysisPage() {
     fetchAll()
   }, [branch, startMonth, endMonth])
 
-  // ───────── 전체 통장 잔액 (종료월 기준) ─────────
+  // ───────── 통장 잔액 ─────────
   useEffect(() => {
     const fetchBalance = async () => {
       if (!branch || !endMonth) return
@@ -185,8 +183,51 @@ export default function GPTSalonAnalysisPage() {
     fetchBalance()
   }, [branch, endMonth])
 
-  const toggleMonth = (m: string) => {
-    setOpenMonths((p) => ({ ...p, [m]: !p[m] }))
+  const toggleMonth = (m: string) => setOpenMonths((p) => ({ ...p, [m]: !p[m] }))
+
+  // 🧠 GPT 분석 호출
+  const handleAnalyze = async () => {
+    if (!branch || !startMonth || !endMonth) return alert('지점과 기간을 선택하세요.')
+    setAnalyzing(true)
+    setResult('')
+    setTitle('')
+
+    try {
+      const headers = await apiAuthHeader()
+      const payload = {
+        branch,
+        start_month: startMonth,
+        end_month: endMonth,
+        months: monthBlocks,
+        total_fixed_expense: totalFixedExpense,
+        total_variable_expense: totalVariableExpense,
+        total_expense: totalExpense,
+        total_pass_paid: totalPassPaid,
+        total_pass_used: totalPassUsed,
+        total_pass_balance: totalPassBalance,
+        total_bank_inflow: totalBankInflow,
+        cash_balance: cashBalance,
+      }
+
+      const res = await fetch(`${API_BASE}/gpt/salon-analysis`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload),
+      })
+      const data = await res.json()
+
+      if (!res.ok) throw new Error(data?.detail || 'GPT 분석 실패')
+
+      setResult(data.analysis)
+      setTitle(data.title)
+      setAnalysisId(data.analysis_id || null)
+      setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth' }), 300)
+    } catch (err: any) {
+      alert(err.message)
+    } finally {
+      setAnalyzing(false)
+    }
   }
 
   return (
@@ -299,6 +340,30 @@ export default function GPTSalonAnalysisPage() {
           <div className="p-3 border rounded bg-white"><div className="text-gray-500">정액권 잔액</div><div className="font-semibold text-right">{totalPassBalance.toLocaleString()}원</div></div>
         </div>
       </section>
+      {/* ───────── GPT 분석 버튼 ───────── */}
+      <button
+        onClick={handleAnalyze}
+        disabled={analyzing || monthBlocks.length === 0}
+        className="w-full bg-black text-white py-3 rounded-lg hover:opacity-80 disabled:opacity-40 mt-6"
+      >
+        {analyzing ? 'GPT 분석 중...' : '🤖 GPT로 재무 분석 리포트 생성'}
+      </button>
+
+      {/* ───────── GPT 결과 출력 ───────── */}
+      {result && (
+        <section
+          ref={resultRef}
+          className="bg-white border rounded-lg shadow-sm p-6 space-y-3 mt-6"
+        >
+          <h2 className="text-lg font-semibold">{title || 'GPT 분석 결과'}</h2>
+          <pre className="whitespace-pre-wrap leading-relaxed text-gray-800">{result}</pre>
+          {analysisId && (
+            <p className="text-xs text-gray-400">
+              저장됨 ID: {analysisId}
+            </p>
+          )}
+        </section>
+      )}
     </main>
   )
 }
