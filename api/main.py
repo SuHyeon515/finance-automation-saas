@@ -1105,7 +1105,7 @@ async def delete_asset_log(
     supabase.table("assets_log").delete().eq("id", id).eq("user_id", user_id).execute()
     return {"ok": True}
 
-# ✅ 자동 급여 불러오기 API
+# ✅ 자동 급여 불러오기 API (수정판)
 @app.get("/transactions/salary_auto_load")
 async def salary_auto_load(
     branch: str = Query(...),
@@ -1116,6 +1116,7 @@ async def salary_auto_load(
     """
     지정된 지점(branch)과 기간(start~end)에 해당하는 거래내역 중
     '월급' 키워드를 가진 거래만 불러와 자동 매핑.
+    개별 거래(설명/내용) 단위로 모두 반환.
     """
     user_id = await get_user_id(authorization)
 
@@ -1128,15 +1129,14 @@ async def salary_auto_load(
             .ilike("branch", f"%{branch}%")
             .gte("tx_date", f"{start}-01")
             .lte("tx_date", pd.Period(end).end_time.strftime("%Y-%m-%d"))
-            .ilike("category", "%월급%")  # ✅ 배당 제거 → 월급만 필터
+            .ilike("category", "%월급%")
             .execute()
         )
 
         rows = res.data or []
-        print(f"📦 [DEBUG] 월급만 필터된 rows ({branch}):", rows[:5])
+        print(f"📦 [DEBUG] 월급 rows ({branch}):", rows[:5])
 
         if not rows:
-            print("⚠️ 월급 관련 거래 없음")
             return []
 
         # ✅ 2. DataFrame 변환
@@ -1144,33 +1144,29 @@ async def salary_auto_load(
         df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
         df["month"] = pd.to_datetime(df["tx_date"]).dt.strftime("%Y-%m")
 
-        # ✅ 3. 이름: description 그대로 사용 (비어있으면 '기타')
+        # ✅ 3. 이름: description 그대로 사용 (없으면 '기타')
         df["name"] = df["description"].fillna("기타").astype(str).str.strip()
 
-        # ✅ 4. base만 계산 (extra 없음)
+        # ✅ 4. 필드 매핑
         df["base"] = df["amount"]
-        df["extra"] = 0  # ✅ 배당 제거
+        df["extra"] = 0
         df["sales"] = 0
+        df["rank"] = "디자이너"
 
-        # ✅ 5. 같은 사람 + 같은 달 합산
-        grouped = (
-            df.groupby(["name", "month"], as_index=False)
-            .agg({"base": "sum"})
-        )
-
+        # ✅ 5. 개별 거래 단위로 변환 (groupby 제거)
         results = [
             {
                 "name": r["name"],
-                "rank": "디자이너",
+                "rank": r["rank"],
                 "base": abs(float(r["base"])),
-                "extra": 0,     # ✅ 항상 0
+                "extra": 0,
                 "sales": 0,
                 "month": r["month"],
             }
-            for _, r in grouped.iterrows()
+            for _, r in df.iterrows()
         ]
 
-        print(f"✅ [salary_auto_load] 결과 {len(results)}건 (월급만)")
+        print(f"✅ [salary_auto_load] 결과 {len(results)}건 (월급 개별)")
         return results
 
     except Exception as e:
