@@ -2031,6 +2031,9 @@ async def salon_analysis(
         for month_data in months:
             month_label = (month_data.get("month") or "기간미상")[:7]
 
+            # ✅ 월별 BEP 데이터 초기화
+            monthly_bep_data = []
+
             # ✅ 월별 매출/정액권/소진률 계산
             month_pass_paid = float(month_data.get("pass_paid", 0))
             month_pass_used = float(month_data.get("pass_used", 0))
@@ -2044,7 +2047,7 @@ async def salon_analysis(
                 - month_pass_paid + month_pass_used
             )
 
-            # ✅ 해당 월의 실제 지출 계산 (date 필드에서 월 추출)
+            # ✅ 월별 실제 지출 계산
             month_exp_fixed = sum(
                 float(x["amount"]) for x in exp_data
                 if datetime.strptime(x.get("date")[:7], "%Y-%m") == datetime.strptime(month_label, "%Y-%m") and x["category"] == "고정"
@@ -2057,12 +2060,13 @@ async def salon_analysis(
 
             monthly_profit = monthly_sales - (month_exp_fixed + month_exp_var + month_labor)
 
-            # 월별 매출 비중 기반으로 고정비를 가중 분배 (월별 BEP 차별화)
+            # ✅ 월별 매출 비중 기반 고정비 분배
             if fixed_expense > 0 and realized_sales > 0:
                 fixed_per_designer = (fixed_expense * (monthly_sales / realized_sales)) / num_designers
             else:
                 fixed_per_designer = (fixed_expense / months_diff) / num_designers
 
+            # ✅ 디자이너별 BEP 계산
             for r in designers_only:
                 name = r.get("name")
                 rank = r.get("rank", "")
@@ -2076,11 +2080,8 @@ async def salon_analysis(
 
                 personal_sales = monthly_sales / num_designers
                 bep = fixed_per_designer / (1 - commission_rate)
-
-                # ✅ BEP 최소 보정치 (0 방지)
                 if bep <= 0:
-                    bep = personal_sales * 0.8  
-
+                    bep = personal_sales * 0.8
                 achievement_rate = (personal_sales / bep * 100)
                 margin = personal_sales - bep
 
@@ -2102,7 +2103,7 @@ async def salon_analysis(
                 "realized_sales": round(monthly_sales, 0),
                 "net_profit": round(monthly_profit, 0),
                 "avg_bep_achievement": round(avg_monthly_achievement, 1),
-                "usage_rate": round(month_usage_rate, 1)  # ✅ 추가됨
+                "usage_rate": round(month_usage_rate, 1)
             })
 
     bep_monthly_text = "\n".join([
