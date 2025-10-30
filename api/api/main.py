@@ -1910,7 +1910,7 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         print("⚠️ 통장 잔액 조회 실패:", e)
         raise HTTPException(status_code=500, detail=str(e))
     
-# === GPT 분석 (V4.4 — 계산 검증 및 중복 방지 반영판) ===
+# === GPT 분석 (V4.3 — 대표 실질 순이익 반영판) ===
 @app.post("/gpt/salon-analysis")
 async def salon_analysis(
     body: dict = Body(...),
@@ -1919,22 +1919,21 @@ async def salon_analysis(
     if not openai_client:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY 미설정")
 
-    # 사용자 인증
     user_id = await get_user_id(authorization)
-    branch = body.get("branch", "지점명 미입력")
+    branch = body.get("branch")
 
-    # 🔹 months 리스트 검증
+    # 🔹 months 리스트에서 주요 값 합산
     months = body.get("months", [])
     if not months:
         raise HTTPException(status_code=400, detail="months 데이터 누락")
 
-    # === 🔸 1. 기본 합계 계산 ===
+    # === 월별 합계 계산 ===
     card_sales = sum(m.get("card_sales", 0) for m in months)
     pay_sales = sum(m.get("pay_sales", 0) for m in months)
     cash_sales = sum(m.get("cash_sales", 0) for m in months)
     account_sales = sum(m.get("account_sales", 0) for m in months)
-    etc_sales = cash_sales + account_sales  # ✅ 추가됨
-    total_sales = card_sales + pay_sales + etc_sales
+    etc_sales = cash_sales + account_sales
+    total_sales = card_sales + pay_sales + cash_sales + account_sales
 
     pass_paid = sum(m.get("pass_paid", 0) for m in months)
     pass_used = sum(m.get("pass_used", 0) for m in months)
@@ -1944,126 +1943,158 @@ async def salon_analysis(
     var_exp = sum(m.get("variable_expense", 0) for m in months)
     owner_dividend = sum(m.get("owner_dividend", 0) for m in months)
 
-    # === 🔸 2. 인건비 계산 (중복 방지된 월별 합계)
+    # 🔹 급여(인건비): 모든 인원의 급여 합산
     labor_cost = sum(
-        sum(s.get("total_amount", 0) for s in m.get("salaries", []))
+        s.get("total_amount", 0)
         for m in months
+        for s in m.get("salaries", [])
     )
 
-    # === 🔸 3. 은행 입출금 계산 ===
+    # 🔹 은행 입출금 (주의: inflow에 비영업성 유입이 섞일 수 있음)
     bank_in = sum(m.get("bank_inflow", 0) for m in months)
     bank_out = fixed_exp + var_exp + owner_dividend + labor_cost
 
-    # === 🔸 4. 파생 지표 계산 ===
-    realized_sales = (total_sales - pass_paid) + pass_used  # 실현 매출
-    usage_rate = (pass_used / pass_paid * 100) if pass_paid else 0  # 정액권 소진률
-    fee_rate = ((total_sales - bank_in) / total_sales * 100) if total_sales else 0  # 수수료율
-    labor_rate = (labor_cost / realized_sales * 100) if realized_sales else 0  # 인건비율
-    net_profit = realized_sales - (fixed_exp + var_exp + labor_cost)  # 회계상 순이익
-    real_profit = net_profit + owner_dividend  # 대표 기준 실질 순이익
-    real_profit_rate = (real_profit / realized_sales * 100) if realized_sales else 0
-    cashflow = bank_in - bank_out  # 현금흐름
+    # === 자동 계산 ===
+    realized_sales = (total_sales - pass_paid) + pass_used
+    usage_rate = (pass_used / pass_paid * 100) if pass_paid else 0
 
-    # === 🔸 5. 디버그 로그 (서버 로그용)
-    print("📊 [DEBUG] 계산 결과 요약:")
-    print({
-        "branch": branch,
-        "card_sales": card_sales,
-        "pay_sales": pay_sales,
-        "cash_sales": cash_sales,
-        "account_sales": account_sales,
-        "labor_cost": labor_cost,
-        "fixed_exp": fixed_exp,
-        "var_exp": var_exp,
-        "owner_dividend": owner_dividend,
-        "bank_in": bank_in,
-        "bank_out": bank_out,
-        "realized_sales": realized_sales,
-        "net_profit": net_profit,
-        "real_profit": real_profit,
-        "real_profit_rate": real_profit_rate,
-    })
+    # 🔸 수수료율 보정 로직
+    # - 기본적으로 카드+페이 매출을 수수료 대상 기준(fee_base)으로 사용
+    # - 은행입금이 총매출/fee_base를 초과하는 경우(비영업성 유입 섞임),
+    #   음수 수수료율이 나오지 않도록 0%로 클램프
+    fee_base = card_sales + pay_sales
+    # 프론트에서 영업외 유입을 제외한 'bank_inflow_filtered'를 넘겨주면 우선 사용
+    bank_in_filtered = body.get("bank_inflow_filtered")
+    if bank_in_filtered is None:
+        # 필터 값이 없으면 보수적으로 bank_in과 fee_base 중 작은 값을 사용
+        bank_in_for_fee = min(bank_in, fee_base) if fee_base else 0
+    else:
+        bank_in_for_fee = float(bank_in_filtered)
+
+    raw_fee_rate = ((fee_base - bank_in_for_fee) / fee_base * 100) if fee_base else 0
+    fee_rate = max(0.0, raw_fee_rate)  # 음수 방지
+
+    labor_rate = (labor_cost / realized_sales * 100) if realized_sales else 0
+    net_profit = realized_sales - (fixed_exp + var_exp + labor_cost)
+    real_profit = net_profit + owner_dividend
+    real_profit_rate = (real_profit / realized_sales * 100) if realized_sales else 0
+    cashflow = bank_in - bank_out
 
     title_date = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
 
-    # === 💈 GPT 프롬프트 생성 ===
+    # 🔸 적자/흑자에 따라 자동 문장 분기
+    profit_sentence_tail = (
+        "즉, 회계상 손익과 무관하게 대표 기준 실수익은 **이익 구간**입니다."
+        if real_profit >= 0 else
+        "즉, 대표 기준 **적자 구간**이며, 인건비·변동비·수수료 구조 점검이 필요합니다."
+    )
+
+    # === 💈 제이가빈 회계 자동분석 프롬프트 V4.3 ===
     prompt = f"""
-💈 제이가빈 회계 자동분석 프롬프트 (V4.4 — 검증 반영판)
+💈 제이가빈 회계 자동분석 프롬프트 (V4.3 — 대표 실질 순이익 반영판)
 🎯 역할
+
 당신은 미용실 전문 회계 분석 AI입니다.
-입력된 매출/지출/정액권 데이터를 바탕으로
-{branch}의 실질 수익 구조를 분석하십시오.
+입력된 은행 입출금 데이터, 매출 분류(카드·페이),
+정액권 결제·사용 정보, 지출 카테고리별 합계,
+그리고 사업자배당(대표 실수익) 정보를 기반으로
+
+{branch}의
+
+회계형 손익 구조
+수수료 효율
+부채 리스크
+지출 효율성
+대표 기준 실질 수익률
+을 분석하십시오.
+모든 금액은 원(₩) 단위입니다.
 
 ──────────────────────────────
-[Ⅰ. 입력 데이터 요약]
+[Ⅰ. 입력 데이터 구조]
 
 (1) 매출 관련
+항목\t설명
 카드매출\t{card_sales:,.0f}원
 페이매출\t{pay_sales:,.0f}원
-기타매출(현금·계좌)\t{etc_sales:,.0f}원
+기타매출 (현금·계좌 등)\t{etc_sales:,.0f}원
 총매출\t{total_sales:,.0f}원
 
 (2) 정액권 관련
-정액권 결제총액\t{pass_paid:,.0f}원
-정액권 차감총액\t{pass_used:,.0f}원
-잔액(부채)\t{pass_balance:,.0f}원
+항목\t설명
+정액권 결제금액 (선불)\t{pass_paid:,.0f}원
+정액권 사용금액 (차감)\t{pass_used:,.0f}원
 
 (3) 은행 입출금
-입금합계\t{bank_in:,.0f}원
-출금합계\t{bank_out:,.0f}원
+항목\t설명
+은행 입금 합계\t{bank_in:,.0f}원
+은행 출금 합계\t{bank_out:,.0f}원
 
 (4) 지출 구조
-고정지출\t{fixed_exp:,.0f}원
-변동지출\t{var_exp:,.0f}원
-인건비\t{labor_cost:,.0f}원
-사업자배당\t{owner_dividend:,.0f}원
+구분\t금액\t설명
+고정지출\t{fixed_exp:,.0f}원\t임대료, 렌탈비, 통신비 등
+변동지출\t{var_exp:,.0f}원\t재료비, 광고비, 복리후생 등
+인건비\t{labor_cost:,.0f}원\t급여, 4대보험, 외주비 등
+사업자배당\t{owner_dividend:,.0f}원\t대표 개인 수익(인출액)
 
 ──────────────────────────────
 [Ⅱ. 자동 계산 결과]
 
-실현매출\t{realized_sales:,.0f}원
-회계상 순이익\t{net_profit:,.0f}원
-실질 순이익(대표 기준)\t{real_profit:,.0f}원 ({real_profit_rate:.1f}%)
-수수료율\t{fee_rate:.1f}%
-인건비율\t{labor_rate:.1f}%
-정액권 소진률\t{usage_rate:.1f}%
-현금흐름\t{cashflow:,.0f}원
+실현매출\t(총매출 − 정액권결제) + 정액권차감\t= {realized_sales:,.0f}원
+정액권 잔액\t정액권결제 − 정액권차감\t= {pass_balance:,.0f}원
+소진률(%)\t(정액권차감 ÷ 정액권결제) × 100\t= {usage_rate:.1f}%
+수수료율(%)\t(카드+페이 기준) = {fee_rate:.2f}%
+인건비율(%)\t(인건비 ÷ 실현매출) × 100\t= {labor_rate:.2f}%
+회계상 순이익\t실현매출 − (고정+변동+인건비)\t= {net_profit:,.0f}원
+실질 순이익(대표 기준)\t회계상 순이익 + 사업자배당\t= {real_profit:,.0f}원
+실질 수익률(%)\t(실질 순이익 ÷ 실현매출) × 100\t= {real_profit_rate:.1f}%
+현금흐름\t입금−출금\t= {cashflow:,.0f}원
+
+※ 메모: 은행입금에 영업 외 유입이 포함된 경우 기존 수수료율이 음수가 될 수 있어
+‘카드+페이’ 기준으로 보정하여 산출했습니다.
 
 ──────────────────────────────
-[Ⅲ. 분석 지침]
-1️⃣ 매출 대비 실현매출 구조 평가
-2️⃣ 정액권 리스크 및 잔액 비율 분석
-3️⃣ 인건비율/수수료율/현금흐름 평가
-4️⃣ 실질 수익률(대표 기준) 해석
-5️⃣ KPI 제안 및 개선 방향 제시
+[Ⅲ. 분석 항목]
+(이하 동일)…
 
 ──────────────────────────────
-[Ⅳ. KPI 기준]
-- 실질 수익률: 15% 이상 (대표 기준 안정 수익)
-- 인건비율: 40% 이하 (효율적 인력 구조)
-- 수수료율: 3% 이하 (결제 효율화)
-- 정액권 소진률: 95% 이상 (부채 최소화)
-- 현금흐름: + 유지 (출금 대비 안정성)
-──────────────────────────────
+[Ⅳ. 출력 형식]
+
+📈 요약
+실현매출: ₩{realized_sales:,.0f}
+회계상 순이익: ₩{net_profit:,.0f}
+사업자배당(대표 순수익): ₩{owner_dividend:,.0f}
+실질 순이익(대표 기준): ₩{real_profit:,.0f} ({real_profit_rate:.1f}%)
+수수료율(카드+페이 기준): {fee_rate:.1f}%
+인건비율: {labor_rate:.1f}%
+정액권 소진률: {usage_rate:.1f}%
+정액권 잔액(부채): ₩{pass_balance:,.0f}
+현금흐름(입금−출금): ₩{cashflow:,.0f}
+
+💬 자동 해석 문장 (대표 기준)
+“{branch}의 회계상 순이익은 {net_profit:,.0f}원이며,
+대표 배당 {owner_dividend:,.0f}원을 포함한
+실질 순이익은 {real_profit:,.0f}원({real_profit_rate:.1f}%) 입니다.
+{profit_sentence_tail}”
 """
 
     # === GPT 호출 ===
     try:
         resp = openai_client.chat.completions.create(
             model="gpt-4o",
-            temperature=0.2,
+            temperature=0.25,
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "당신은 미용실 재무 전문가입니다. "
-                        "모든 계산 결과를 그대로 반영하고, "
-                        "추정치나 임의 계산 없이 주어진 값을 기반으로 리포트를 작성하세요."
+                        "당신은 미용실 전문 회계 분석가입니다. "
+                        "주어진 수치만 사용하여 회계형 손익 분석 리포트를 작성하십시오. "
+                        "수익률·비율·금액은 반드시 실제 계산값을 반영하고, "
+                        "임의 추정이나 생성은 금지됩니다."
                     ),
                 },
                 {"role": "user", "content": prompt},
             ],
-            timeout=90,
+            timeout=120,
         )
         analysis_text = resp.choices[0].message.content
     except Exception as e:
@@ -2092,7 +2123,6 @@ async def salon_analysis(
         print("[GPT 분석 저장 실패]", e)
         analysis_id = None
 
-    # === 최종 반환 ===
     return {
         "analysis": analysis_text,
         "analysis_id": analysis_id,
@@ -2106,6 +2136,11 @@ async def salon_analysis(
         "pass_usage_rate": usage_rate,
         "pass_balance": pass_balance,
         "cashflow": cashflow,
+        "notes": {
+            "raw_fee_rate": raw_fee_rate,     # 디버그용
+            "bank_in": bank_in,               # 원자료
+            "fee_base": fee_base,             # 카드+페이 기준
+        }
     }
 
 # ✅ 사업자 유입총액 계산 API (내수금, 기타수입 제외)
