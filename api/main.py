@@ -1564,7 +1564,7 @@ async def transaction_summary(
 ):
     """
     선택된 지점(branch)과 기간(start_month~end_month)을 기준으로
-    월별 고정/변동지출 합계를 반환합니다.
+    월별 고정/변동지출 + 사업자배당 합계를 반환합니다.
     """
     user_id = await get_user_id(authorization)
     branch = body.get("branch")
@@ -1592,11 +1592,14 @@ async def transaction_summary(
         df["month"] = pd.to_datetime(df["tx_date"]).dt.strftime("%Y-%m")
         df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
 
+        # ✅ 고정/변동 지출 계산
         monthly_summary = (
             df.groupby(["month"])
             .apply(lambda x: pd.Series({
-                    "fixed_expense": abs(x.loc[x["is_fixed"] == True, "amount"].clip(upper=0).sum()),
-                    "variable_expense": abs(x.loc[x["is_fixed"] == False, "amount"].clip(upper=0).sum()),
+                "fixed_expense": abs(x.loc[(x["is_fixed"] == True) & (x["category"] != "사업자배당"), "amount"].clip(upper=0).sum()),
+                "variable_expense": abs(x.loc[(x["is_fixed"] == False) & (x["category"] != "사업자배당"), "amount"].clip(upper=0).sum()),
+                # ✅ 사업자배당 추가
+                "owner_dividend": abs(x.loc[x["category"] == "사업자배당", "amount"].clip(upper=0).sum()),
             }))
             .reset_index()
         )

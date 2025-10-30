@@ -104,18 +104,18 @@ export default function GPTSalonAnalysisPage() {
         const expJson = await expRes.json()
 
         const expMap: Record<string, { fixed_expense: number; variable_expense: number }> = {}
-        const dividendMap: Record<string, number> = {} // ✅ 추가
+        const dividendMap: Record<string, number> = {}
 
+        // ✅ 백엔드 응답이 category별이 아니라, 월 단위 합산 형태일 경우 처리
         expJson?.forEach?.((r: any) => {
           const m = r.month
-          if (!expMap[m]) expMap[m] = { fixed_expense: 0, variable_expense: 0 }
-          if (!dividendMap[m]) dividendMap[m] = 0
-
-          if (r.category === '고정') expMap[m].fixed_expense = r.total || r.fixed_expense || 0
-          else if (r.category === '변동') expMap[m].variable_expense = r.total || r.variable_expense || 0
-          else if (r.category === '사업자배당') dividendMap[m] = r.total || 0 // ✅ 추가
+          expMap[m] = {
+            fixed_expense: r.fixed_expense || r.total_fixed_expense || 0,
+            variable_expense: r.variable_expense || r.total_variable_expense || 0,
+          }
+          dividendMap[m] = r.owner_dividend || r.dividend || 0
         })
-
+        
         // 3️⃣ 급여 / 인원수
         const { data: salaryData } = await supabase
           .from('designer_salaries')
