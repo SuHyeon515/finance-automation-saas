@@ -1911,7 +1911,7 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         raise HTTPException(status_code=500, detail=str(e))
     
 # === GPT DEBUG 분석 (V5.2 — 제이가빈 재무건전성 검증 모드) ===
-@app.post("/gpt/salon-analysis ")
+@app.post("/gpt/salon-analysis")
 async def salon_analysis(
     body: dict = Body(...),
     authorization: Optional[str] = Header(None),
