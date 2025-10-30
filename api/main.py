@@ -1910,102 +1910,34 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         print("⚠️ 통장 잔액 조회 실패:", e)
         raise HTTPException(status_code=500, detail=str(e))
     
-@app.post("/gpt/salon-analysis")
-async def salon_analysis_auto(
+# === GPT DEBUG 분석 (V5.2 — 제이가빈 재무건전성 검증 모드) ===
+@app.post("/gpt/salon-analysis-debug")
+async def salon_analysis_debug(
     body: dict = Body(...),
     authorization: Optional[str] = Header(None),
 ):
-    """
-    ✅ 프론트에서 지점명과 기간만 받음.
-    서버가 직접 transactions, salaries, salon_monthly_data를 조회해서 분석.
-    """
+    # 1️⃣ 기본 검증
     if not openai_client:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY 미설정")
 
     user_id = await get_user_id(authorization)
-    branch = body.get("branch")
-    start_month = body.get("start_month")
-    end_month = body.get("end_month")
+    branch = body.get("branch", "지점명 미입력")
+    period = body.get("period", "기간 미입력")
 
-    if not all([branch, start_month, end_month]):
-        raise HTTPException(status_code=400, detail="branch, start_month, end_month 필수")
+    # 2️⃣ 입력 데이터 추출
+    total_sales = body.get("total_sales", 0)
+    pass_paid = body.get("pass_paid", 0)
+    pass_used = body.get("pass_used", 0)
+    fixed_exp = body.get("fixed_exp", 0)
+    var_exp = body.get("var_exp", 0)
+    labor_cost = body.get("labor_cost", 0)
+    owner_dividend = body.get("owner_dividend", 0)
+    bank_in = body.get("bank_in", 0)
+    bank_out = body.get("bank_out", 0)
 
-    # === 1️⃣ salon_monthly_data 조회 ===
-    try:
-        res_month = (
-            supabase.table("salon_monthly_data")
-            .select("card_sales, pay_sales, cash_sales, account_sales, pass_paid, pass_used, month")
-            .eq("user_id", user_id)
-            .eq("branch", branch)
-            .gte("month", start_month)
-            .lte("month", end_month)
-            .execute()
-        )
-        mdata = res_month.data or []
-    except Exception as e:
-        mdata = []
-        print("⚠️ salon_monthly_data 조회 실패:", e)
-
-    # === 2️⃣ transactions (지출, 배당, 입출금) ===
-    try:
-        res_tx = (
-            supabase.table("transactions")
-            .select("amount, category, is_fixed, tx_date")
-            .eq("user_id", user_id)
-            .eq("branch", branch)
-            .gte("tx_date", f"{start_month}-01")
-            .lte("tx_date", pd.Period(end_month).end_time.strftime("%Y-%m-%d"))
-            .execute()
-        )
-        txs = res_tx.data or []
-    except Exception as e:
-        txs = []
-        print("⚠️ transactions 조회 실패:", e)
-
-    # === 3️⃣ designer_salaries (인건비) ===
-    try:
-        res_sal = (
-            supabase.table("designer_salaries")
-            .select("total_amount, month")
-            .eq("user_id", user_id)
-            .eq("branch", branch)
-            .gte("month", start_month)
-            .lte("month", end_month)
-            .execute()
-        )
-        sals = res_sal.data or []
-    except Exception as e:
-        sals = []
-        print("⚠️ salaries 조회 실패:", e)
-
-    # === 4️⃣ 데이터 합산 ===
-    total_sales = sum(
-        (m.get("card_sales", 0) or 0)
-        + (m.get("pay_sales", 0) or 0)
-        + (m.get("cash_sales", 0) or 0)
-        + (m.get("account_sales", 0) or 0)
-        for m in mdata
-    )
-    pass_paid = sum((m.get("pass_paid", 0) or 0) for m in mdata)
-    pass_used = sum((m.get("pass_used", 0) or 0) for m in mdata)
-    pass_balance = pass_paid - pass_used
-
-    df_tx = pd.DataFrame(txs)
-    df_tx["amount"] = pd.to_numeric(df_tx.get("amount", 0), errors="coerce").fillna(0)
-    df_tx["is_fixed"] = df_tx.get("is_fixed", False)
-    df_tx["category"] = df_tx.get("category", "")
-
-    fixed_exp = abs(df_tx.loc[(df_tx["amount"] < 0) & (df_tx["is_fixed"] == True) & (df_tx["category"] != "사업자배당"), "amount"].sum())
-    var_exp = abs(df_tx.loc[(df_tx["amount"] < 0) & (df_tx["is_fixed"] == False) & (df_tx["category"] != "사업자배당"), "amount"].sum())
-    owner_dividend = abs(df_tx.loc[(df_tx["amount"] < 0) & (df_tx["category"] == "사업자배당"), "amount"].sum())
-
-    bank_in = df_tx.loc[df_tx["amount"] > 0, "amount"].sum()
-    bank_out = abs(df_tx.loc[df_tx["amount"] < 0, "amount"].sum())
-
-    labor_cost = sum((s.get("total_amount", 0) or 0) for s in sals)
-
-    # === 5️⃣ 자동 계산 ===
+    # 3️⃣ 계산식
     realized_sales = (total_sales - pass_paid) + pass_used
+    pass_balance = pass_paid - pass_used
     net_profit = realized_sales - (fixed_exp + var_exp + labor_cost)
     real_profit = net_profit + owner_dividend
     real_profit_rate = (real_profit / realized_sales * 100) if realized_sales else 0
@@ -2015,114 +1947,170 @@ async def salon_analysis_auto(
     fixed_rate = (fixed_exp / realized_sales * 100) if realized_sales else 0
     pass_balance_rate = (pass_balance / realized_sales * 100) if realized_sales else 0
 
-    # === 6️⃣ GPT 프롬프트 ===
-    title_date = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
+    # 4️⃣ 각 항목 평가
+    profit_status = (
+        "안정" if real_profit_rate >= 10 else "보통" if real_profit_rate >= 0 else "위험"
+    )
+    cash_status = "안정" if cashflow >= 0 else "위험"
+    labor_status = (
+        "안정" if labor_rate <= 50 else "보통" if labor_rate <= 60 else "위험"
+    )
+    debt_status = (
+        "안정" if pass_balance_rate <= 30 else "보통" if pass_balance_rate <= 60 else "위험"
+    )
 
+    # 종합등급
+    danger_count = sum(
+        1 for s in [profit_status, cash_status, labor_status, debt_status] if s == "위험"
+    )
+    final_grade = "A(안정)" if danger_count == 0 else "B(보통)" if danger_count <= 2 else "C(위험)"
+    overall_status = (
+        "매우 안정적"
+        if final_grade.startswith("A")
+        else "보통 수준"
+        if final_grade.startswith("B")
+        else "재무 리스크 존재"
+    )
+
+    # 5️⃣ 프롬프트 (절대 수정 금지)
     prompt = f"""
-💼 제이가빈 재무건전성 진단 프롬프트 (서버자동집계판)
+💼 제이가빈 재무건전성 검증용 프롬프트 (DEBUG 모드)
 
-당신은 미용실 전문 **회계·재무건전성 분석 AI**입니다.
-{branch}의 {start_month}~{end_month} 기간 거래 데이터를 바탕으로
-재무 안정성과 운영 지속가능성을 진단하십시오.
-KPI 제안 없이, 현재 상태(안정·보통·위험)만 평가하십시오.
+당신은 미용실 전문 **회계·재무 분석 AI**입니다.  
+입력된 모든 수치(매출·정액권·지출·배당·입출금 등)를 **숨김없이 그대로 출력**하고,  
+해당 값이 각 계산식에 어떻게 반영되는지를 단계별로 계산·검증하십시오.  
 
-──────────────────────────────
-[Ⅰ. 데이터 요약]
-
-총매출\t{total_sales:,.0f}원
-정액권 결제총액\t{pass_paid:,.0f}원
-정액권 차감총액\t{pass_used:,.0f}원
-고정지출\t{fixed_exp:,.0f}원
-변동지출\t{var_exp:,.0f}원
-인건비\t{labor_cost:,.0f}원
-대표배당\t{owner_dividend:,.0f}원
-은행입금합계\t{bank_in:,.0f}원
-은행출금합계\t{bank_out:,.0f}원
+📌 절대 요약하지 말고, 모든 입력값과 계산과정을 원문 그대로 나열해야 합니다.
+📌 마지막에는 계산된 결과(실현매출·순이익·수익률 등)과 평가(A/B/C)를 함께 표시하십시오.
 
 ──────────────────────────────
-[Ⅱ. 계산 결과]
+[Ⅰ. 입력 데이터 원본]
 
-실현매출\t→ {realized_sales:,.0f}원
-실질 순이익\t→ {real_profit:,.0f}원
-실질 수익률\t→ {real_profit_rate:.1f}%
-현금흐름\t→ {cashflow:,.0f}원
-인건비율\t→ {labor_rate:.1f}%
-정액권 잔액비율\t→ {pass_balance_rate:.1f}%
-
-──────────────────────────────
-[Ⅲ. 평가 기준]
-수익 구조 → 실질 수익률 10% 이상 안정 / 0~10% 보통 / 0% 미만 위험  
-유동성 → 현금흐름 0 이상 안정 / 음수 위험  
-비용 구조 → 인건비율 40~50% 안정 / 50~60% 보통 / >60% 위험  
-부채 → 정액권 잔액비율 30% 이하 안정 / 30~60% 보통 / >60% 위험  
-종합 등급 → A(안정): 위험 없음 / B(보통): 1~2개 위험 / C(위험): 3개 이상 위험  
+총매출: {total_sales:,.0f}원  
+정액권 결제총액: {pass_paid:,.0f}원  
+정액권 차감총액: {pass_used:,.0f}원  
+고정지출: {fixed_exp:,.0f}원  
+변동지출: {var_exp:,.0f}원  
+인건비: {labor_cost:,.0f}원  
+대표배당: {owner_dividend:,.0f}원  
+은행입금합계: {bank_in:,.0f}원  
+은행출금합계: {bank_out:,.0f}원  
+(지점명: {branch}, 분석기간: {period})
 
 ──────────────────────────────
-[Ⅳ. 출력 형식]
-📊 {branch} 재무건전성 진단 요약
-| 항목 | 수치 | 평가 |
-|------|------:|------|
-| 실현매출 | ₩{realized_sales:,.0f} | |
-| 실질 순이익 | ₩{real_profit:,.0f} | |
-| 실질 수익률 | {real_profit_rate:.1f}% | (수익구조판정) |
-| 현금흐름 | ₩{cashflow:,.0f} | (유동성판정) |
-| 인건비율 | {labor_rate:.1f}% | (비용구조판정) |
-| 정액권 잔액비율 | {pass_balance_rate:.1f}% | (부채판정) |
+[Ⅱ. 계산식 적용 결과]
 
-💬 “{branch}의 실질 수익률은 {real_profit_rate:.1f}%이며,
-현금흐름은 {cashflow:,.0f}원입니다.
-이를 바탕으로 전반적 재무건전성을 A/B/C 등급으로 판단하십시오.”
+1️⃣ 실현매출 계산  
+(총매출 - 정액권결제 + 정액권차감)  
+= ({total_sales:,.0f} - {pass_paid:,.0f}) + {pass_used:,.0f}  
+→ **실현매출 = {realized_sales:,.0f}원**
+
+2️⃣ 정액권 잔액  
+(정액권결제 - 정액권차감)  
+= {pass_paid:,.0f} - {pass_used:,.0f}  
+→ **정액권 잔액 = {pass_balance:,.0f}원**
+
+3️⃣ 회계상 순이익  
+(실현매출 - (고정 + 변동 + 인건비))  
+= {realized_sales:,.0f} - ({fixed_exp:,.0f} + {var_exp:,.0f} + {labor_cost:,.0f})  
+→ **회계상 순이익 = {net_profit:,.0f}원**
+
+4️⃣ 실질 순이익 (대표 기준)  
+(회계상 순이익 + 대표배당)  
+= {net_profit:,.0f} + {owner_dividend:,.0f}  
+→ **실질 순이익 = {real_profit:,.0f}원**
+
+5️⃣ 현금흐름  
+(은행입금 - 은행출금)  
+= {bank_in:,.0f} - {bank_out:,.0f}  
+→ **현금흐름 = {cashflow:,.0f}원**
+
+6️⃣ 각 비율 계산  
+- 실질 수익률 = ({real_profit:,.0f} ÷ {realized_sales:,.0f}) × 100 = {real_profit_rate:.1f}%  
+- 인건비율 = ({labor_cost:,.0f} ÷ {realized_sales:,.0f}) × 100 = {labor_rate:.1f}%  
+- 변동비율 = ({var_exp:,.0f} ÷ {realized_sales:,.0f}) × 100 = {var_rate:.1f}%  
+- 고정비율 = ({fixed_exp:,.0f} ÷ {realized_sales:,.0f}) × 100 = {fixed_rate:.1f}%  
+- 정액권 잔액비율 = ({pass_balance:,.0f} ÷ {realized_sales:,.0f}) × 100 = {pass_balance_rate:.1f}%
+
+──────────────────────────────
+[Ⅲ. 재무건전성 평가기준]
+
+| 항목 | 기준 | 결과 |
+|------|------|------|
+| 수익성 | 실질 수익률 10%↑ 안정 / 0~10% 보통 / 0↓ 위험 | → {profit_status} |
+| 유동성 | 현금흐름 0↑ 안정 / 음수 위험 | → {cash_status} |
+| 비용구조 | 인건비율 40~50 안정 / 50~60 보통 / 60↑ 위험 | → {labor_status} |
+| 부채건전성 | 정액권 잔액비율 30↓ 안정 / 30~60 보통 / 60↑ 위험 | → {debt_status} |
+
+종합등급 → {final_grade}  
+(안정: 모든 항목 양호 / 보통: 1~2 경고 / 위험: 3개 이상 위험)
+
+──────────────────────────────
+[Ⅳ. 자동 해석 문장]
+
+“{branch}의 실현매출은 {realized_sales:,.0f}원이며,  
+회계상 순이익은 {net_profit:,.0f}원,  
+대표 기준 실질 순이익은 {real_profit:,.0f}원({real_profit_rate:.1f}%)입니다.  
+현금흐름은 {cashflow:,.0f}원으로 {cash_status} 상태이며,  
+인건비율 {labor_rate:.1f}%, 정액권 잔액비율 {pass_balance_rate:.1f}%를 종합할 때  
+전반적인 재무건전성은 **{final_grade} 등급 ({overall_status})** 으로 판단됩니다.”
+
+──────────────────────────────
+[Ⅴ. 검증 요청 안내]
+
+⚙️ GPT는 반드시 위 모든 입력값을 그대로 출력해야 하며,  
+대표님이 수치 하나라도 다를 경우 “입력 불일치 가능성 있음”을 표시해야 합니다.  
+또한 각 항목의 차이를 ‘계산식 vs 입력 데이터’로 비교해 표시하십시오.
 """
 
-    # === 7️⃣ GPT 호출 ===
+    # 6️⃣ GPT 호출 (모델: gpt-4o)
     try:
         resp = openai_client.chat.completions.create(
             model="gpt-4o",
-            temperature=0.25,
-            max_tokens=1200,
+            temperature=0.1,
+            max_tokens=1500,
             messages=[
-                {"role": "system", "content": "당신은 미용실 재무건전성 진단 전문가입니다."},
+                {
+                    "role": "system",
+                    "content": (
+                        "당신은 미용실 회계·재무 검증 전문가입니다. "
+                        "입력된 데이터를 단 하나도 생략하지 않고 그대로 출력하며, "
+                        "모든 계산 과정을 검증하는 보고서를 작성하세요. "
+                        "요약하지 말고 단계별로 모든 수식을 풀어야 합니다."
+                    ),
+                },
                 {"role": "user", "content": prompt},
             ],
+            timeout=120,
         )
         analysis_text = resp.choices[0].message.content
     except Exception as e:
-        print("❌ GPT 호출 실패:", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        print("❌ [GPT 호출 실패]", e)
+        raise HTTPException(status_code=500, detail=f"GPT 분석 요청 실패: {e}")
 
-    # === 8️⃣ 결과 저장 ===
-    title = f"{branch} / {title_date} / 재무건전성 진단 보고서"
-    try:
-        ins = (
-            supabase.table("analyses")
-            .insert({
-                "user_id": user_id,
-                "branch": branch,
-                "title": title,
-                "params": {"branch": branch, "start": start_month, "end": end_month},
-                "result": analysis_text,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            })
-            .execute()
-        )
-        analysis_id = ins.data[0]["id"] if ins and ins.data else None
-    except Exception as e:
-        print("⚠️ 분석결과 저장 실패:", e)
-        analysis_id = None
-
+    # 7️⃣ 결과 반환
     return {
+        "branch": branch,
+        "period": period,
         "analysis": analysis_text,
-        "analysis_id": analysis_id,
-        "title": title,
-        "summary": {
+        "calculated": {
             "realized_sales": realized_sales,
             "real_profit": real_profit,
             "real_profit_rate": real_profit_rate,
             "cashflow": cashflow,
             "labor_rate": labor_rate,
+            "var_rate": var_rate,
+            "fixed_rate": fixed_rate,
             "pass_balance_rate": pass_balance_rate,
+            "profit_status": profit_status,
+            "cash_status": cash_status,
+            "labor_status": labor_status,
+            "debt_status": debt_status,
+            "final_grade": final_grade,
+            "overall_status": overall_status,
         },
     }
+
 
 # ✅ 사업자 유입총액 계산 API (내수금, 기타수입 제외)
 @app.post('/transactions/income-filtered')
