@@ -1910,7 +1910,7 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         print("⚠️ 통장 잔액 조회 실패:", e)
         raise HTTPException(status_code=500, detail=str(e))
     
-# === GPT 분석 (💈 제이가빈 회계 자동분석 V4.3 — 대표 실질 순이익 반영판) ===
+# === GPT 분석 (V4.3 — 대표 실질 순이익 반영판) ===
 @app.post("/gpt/salon-analysis")
 async def salon_analysis(
     body: dict = Body(...),
@@ -1919,29 +1919,42 @@ async def salon_analysis(
     if not openai_client:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY 미설정")
 
-    # === 입력 파라미터 ===
-    branch = body.get("branch")
-    card_sales = float(body.get("card_sales", 0))
-    pay_sales = float(body.get("pay_sales", 0))
-    etc_sales = float(body.get("etc_sales", 0))
-    total_sales = float(body.get("total_sales", 0))
-
-    pass_paid = float(body.get("pass_paid", 0))
-    pass_used = float(body.get("pass_used", 0))
-
-    bank_in = float(body.get("bank_in", 0))
-    bank_out = float(body.get("bank_out", 0))
-
-    fixed_exp = float(body.get("fixed_exp", 0))
-    var_exp = float(body.get("var_exp", 0))
-    labor_cost = float(body.get("labor_cost", 0))
-    owner_dividend = float(body.get("owner_dividend", 0))  # ✅ 대표 배당
-
     user_id = await get_user_id(authorization)
+    branch = body.get("branch")
+
+    # 🔹 months 리스트에서 주요 값 합산
+    months = body.get("months", [])
+    if not months:
+        raise HTTPException(status_code=400, detail="months 데이터 누락")
+
+    # === 월별 합계 계산 ===
+    card_sales = sum(m.get("card_sales", 0) for m in months)
+    pay_sales = sum(m.get("pay_sales", 0) for m in months)
+    cash_sales = sum(m.get("cash_sales", 0) for m in months)
+    account_sales = sum(m.get("account_sales", 0) for m in months)
+    total_sales = card_sales + pay_sales + cash_sales + account_sales
+
+    pass_paid = sum(m.get("pass_paid", 0) for m in months)
+    pass_used = sum(m.get("pass_used", 0) for m in months)
+    pass_balance = pass_paid - pass_used
+
+    fixed_exp = sum(m.get("fixed_expense", 0) for m in months)
+    var_exp = sum(m.get("variable_expense", 0) for m in months)
+    owner_dividend = sum(m.get("owner_dividend", 0) for m in months)
+
+    # 🔹 급여(인건비)는 모든 인원의 급여 합산
+    labor_cost = sum(
+        s.get("total_amount", 0)
+        for m in months
+        for s in m.get("salaries", [])
+    )
+
+    # 🔹 은행 입출금 (inflow만 있음, outflow는 지출 + 배당 + 급여로 대체)
+    bank_in = sum(m.get("bank_inflow", 0) for m in months)
+    bank_out = fixed_exp + var_exp + owner_dividend + labor_cost
 
     # === 자동 계산 ===
     realized_sales = (total_sales - pass_paid) + pass_used
-    pass_balance = pass_paid - pass_used
     usage_rate = (pass_used / pass_paid * 100) if pass_paid else 0
     fee_rate = ((total_sales - bank_in) / total_sales * 100) if total_sales else 0
     labor_rate = (labor_cost / realized_sales * 100) if realized_sales else 0
