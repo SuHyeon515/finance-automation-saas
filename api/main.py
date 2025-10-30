@@ -1910,36 +1910,42 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         print("⚠️ 통장 잔액 조회 실패:", e)
         raise HTTPException(status_code=500, detail=str(e))
     
-# === GPT DEBUG 분석 (V5.2 — 제이가빈 재무건전성 검증 모드) ===
 @app.post("/gpt/salon-analysis")
 async def salon_analysis(
     body: dict = Body(...),
     authorization: Optional[str] = Header(None),
 ):
-    # 1️⃣ 기본 검증
+    """
+    💼 제이가빈 실무형 재무건전성 진단 (운영 데이터 기반)
+    입력된 매출/지출 데이터를 기반으로 GPT가 자동으로 재무건전성 보고서를 생성합니다.
+    """
     if not openai_client:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY 미설정")
 
+    # === 1️⃣ 기본 데이터 추출 ===
     user_id = await get_user_id(authorization)
     branch = body.get("branch", "지점명 미입력")
     period = body.get("period", "기간 미입력")
 
-    # 2️⃣ 입력 데이터 추출
-    total_sales = body.get("total_sales", 0)
-    pass_paid = body.get("pass_paid", 0)
-    pass_used = body.get("pass_used", 0)
-    fixed_exp = body.get("fixed_exp", 0)
-    var_exp = body.get("var_exp", 0)
-    labor_cost = body.get("labor_cost", 0)
-    owner_dividend = body.get("owner_dividend", 0)
-    bank_in = body.get("bank_in", 0)
-    bank_out = body.get("bank_out", 0)
+    total_sales = float(body.get("total_sales", 0))
+    pass_paid = float(body.get("pass_paid", 0))
+    pass_used = float(body.get("pass_used", 0))
+    fixed_exp = float(body.get("fixed_exp", 0))
+    var_exp = float(body.get("var_exp", 0))
+    labor_cost = float(body.get("labor_cost", 0))
+    owner_dividend = float(body.get("owner_dividend", 0))
+    bank_in = float(body.get("bank_in", 0))
+    bank_out = float(body.get("bank_out", 0))
+    balance = float(body.get("balance", 0))
+    interns = int(body.get("interns", 0))
+    visitors_total = int(body.get("visitors_total", 0))
 
-    # 3️⃣ 계산식
+    # === 2️⃣ 주요 계산식 ===
     realized_sales = (total_sales - pass_paid) + pass_used
     pass_balance = pass_paid - pass_used
     net_profit = realized_sales - (fixed_exp + var_exp + labor_cost)
     real_profit = net_profit + owner_dividend
+
     real_profit_rate = (real_profit / realized_sales * 100) if realized_sales else 0
     cashflow = bank_in - bank_out
     labor_rate = (labor_cost / realized_sales * 100) if realized_sales else 0
@@ -1947,152 +1953,119 @@ async def salon_analysis(
     fixed_rate = (fixed_exp / realized_sales * 100) if realized_sales else 0
     pass_balance_rate = (pass_balance / realized_sales * 100) if realized_sales else 0
 
-    # 4️⃣ 각 항목 평가
-    profit_status = (
-        "안정" if real_profit_rate >= 10 else "보통" if real_profit_rate >= 0 else "위험"
-    )
+    # === 3️⃣ 각 항목 평가 ===
+    profit_status = "안정" if real_profit_rate >= 10 else "보통" if real_profit_rate >= 0 else "위험"
     cash_status = "안정" if cashflow >= 0 else "위험"
-    labor_status = (
-        "안정" if labor_rate <= 50 else "보통" if labor_rate <= 60 else "위험"
-    )
-    debt_status = (
-        "안정" if pass_balance_rate <= 30 else "보통" if pass_balance_rate <= 60 else "위험"
-    )
+    labor_status = "안정" if labor_rate <= 50 else "보통" if labor_rate <= 60 else "위험"
+    debt_status = "안정" if pass_balance_rate <= 30 else "보통" if pass_balance_rate <= 60 else "위험"
+    efficiency_rate = fixed_rate + var_rate
+    efficiency_status = "안정" if efficiency_rate <= 70 else "보통" if efficiency_rate <= 90 else "위험"
 
-    # 종합등급
-    danger_count = sum(
-        1 for s in [profit_status, cash_status, labor_status, debt_status] if s == "위험"
-    )
-    final_grade = "A(안정)" if danger_count == 0 else "B(보통)" if danger_count <= 2 else "C(위험)"
-    overall_status = (
-        "매우 안정적"
-        if final_grade.startswith("A")
-        else "보통 수준"
-        if final_grade.startswith("B")
-        else "재무 리스크 존재"
-    )
+    # === 4️⃣ 종합등급 계산 ===
+    danger_count = sum(1 for s in [profit_status, cash_status, labor_status, debt_status, efficiency_status] if s == "위험")
+    if danger_count == 0:
+        final_grade, summary_status = "A", "매우 안정적"
+    elif danger_count <= 2:
+        final_grade, summary_status = "B", "보통 수준"
+    else:
+        final_grade, summary_status = "C", "재무 리스크 존재"
 
-    # 5️⃣ 프롬프트 (절대 수정 금지)
+    # === 5️⃣ GPT 프롬프트 ===
     prompt = f"""
-💼 제이가빈 재무건전성 검증용 프롬프트 (DEBUG 모드)
+💼 제이가빈 실무형 재무건전성 진단 프롬프트 (운영데이터 기반)
 
-당신은 미용실 전문 **회계·재무 분석 AI**입니다.  
-입력된 모든 수치(매출·정액권·지출·배당·입출금 등)를 **숨김없이 그대로 출력**하고,  
-해당 값이 각 계산식에 어떻게 반영되는지를 단계별로 계산·검증하십시오.  
+당신은 미용실 전문 **회계·재무건전성 분석 AI**입니다.
+입력된 운영데이터(매출·지출·정액권·인건비·현금흐름)를 기반으로
+{branch}의 재무건전성과 운영 안정성을 평가하십시오.
 
-📌 절대 요약하지 말고, 모든 입력값과 계산과정을 원문 그대로 나열해야 합니다.
-📌 마지막에는 계산된 결과(실현매출·순이익·수익률 등)과 평가(A/B/C)를 함께 표시하십시오.
+📌 손익계산서나 재무상태표 데이터는 제공되지 않습니다.
+📌 따라서 모든 평가는 “운영 데이터(실현매출·지출·현금흐름)” 중심으로 수행해야 합니다.
+📌 결과는 반드시 표 형태로 출력하고, 각 지표별로 안정/보통/위험을 평가하십시오.
 
 ──────────────────────────────
-[Ⅰ. 입력 데이터 원본]
+[Ⅰ. 운영 데이터 요약]
+
+지점명: {branch}  
+분석기간: {period}
 
 총매출: {total_sales:,.0f}원  
-정액권 결제총액: {pass_paid:,.0f}원  
-정액권 차감총액: {pass_used:,.0f}원  
+정액권 결제총액(선불): {pass_paid:,.0f}원  
+정액권 차감총액(사용): {pass_used:,.0f}원  
 고정지출: {fixed_exp:,.0f}원  
 변동지출: {var_exp:,.0f}원  
-인건비: {labor_cost:,.0f}원  
+인건비(디자이너+인턴): {labor_cost:,.0f}원  
 대표배당: {owner_dividend:,.0f}원  
 은행입금합계: {bank_in:,.0f}원  
 은행출금합계: {bank_out:,.0f}원  
-(지점명: {branch}, 분석기간: {period})
+최신 통장잔액: {balance:,.0f}원  
+인턴 수: {interns}명  
+월평균 방문자 수: {visitors_total}명  
 
 ──────────────────────────────
-[Ⅱ. 계산식 적용 결과]
+[Ⅱ. 주요 계산식]
 
-1️⃣ 실현매출 계산  
-(총매출 - 정액권결제 + 정액권차감)  
-= ({total_sales:,.0f} - {pass_paid:,.0f}) + {pass_used:,.0f}  
-→ **실현매출 = {realized_sales:,.0f}원**
-
-2️⃣ 정액권 잔액  
-(정액권결제 - 정액권차감)  
-= {pass_paid:,.0f} - {pass_used:,.0f}  
-→ **정액권 잔액 = {pass_balance:,.0f}원**
-
-3️⃣ 회계상 순이익  
-(실현매출 - (고정 + 변동 + 인건비))  
-= {realized_sales:,.0f} - ({fixed_exp:,.0f} + {var_exp:,.0f} + {labor_cost:,.0f})  
-→ **회계상 순이익 = {net_profit:,.0f}원**
-
-4️⃣ 실질 순이익 (대표 기준)  
-(회계상 순이익 + 대표배당)  
-= {net_profit:,.0f} + {owner_dividend:,.0f}  
-→ **실질 순이익 = {real_profit:,.0f}원**
-
-5️⃣ 현금흐름  
-(은행입금 - 은행출금)  
-= {bank_in:,.0f} - {bank_out:,.0f}  
-→ **현금흐름 = {cashflow:,.0f}원**
-
-6️⃣ 각 비율 계산  
-- 실질 수익률 = ({real_profit:,.0f} ÷ {realized_sales:,.0f}) × 100 = {real_profit_rate:.1f}%  
-- 인건비율 = ({labor_cost:,.0f} ÷ {realized_sales:,.0f}) × 100 = {labor_rate:.1f}%  
-- 변동비율 = ({var_exp:,.0f} ÷ {realized_sales:,.0f}) × 100 = {var_rate:.1f}%  
-- 고정비율 = ({fixed_exp:,.0f} ÷ {realized_sales:,.0f}) × 100 = {fixed_rate:.1f}%  
-- 정액권 잔액비율 = ({pass_balance:,.0f} ÷ {realized_sales:,.0f}) × 100 = {pass_balance_rate:.1f}%
+- 실현매출 = (총매출 − 정액권결제 + 정액권차감)
+- 정액권 잔액 = (정액권결제 − 정액권차감)
+- 회계상 순이익 = (실현매출 − (고정지출 + 변동지출 + 인건비))
+- 실질 순이익(대표 기준) = (회계상 순이익 + 대표배당)
+- 실질 수익률(%) = (실질 순이익 ÷ 실현매출) × 100
+- 현금흐름 = (은행입금합계 − 은행출금합계)
+- 인건비율 = (인건비 ÷ 실현매출) × 100
+- 변동비율 = (변동지출 ÷ 실현매출) × 100
+- 고정비율 = (고정지출 ÷ 실현매출) × 100
+- 정액권 잔액비율 = (정액권 잔액 ÷ 실현매출) × 100
 
 ──────────────────────────────
-[Ⅲ. 재무건전성 평가기준]
+[Ⅲ. 표준 재무건전성 평가 기준]
 
-| 항목 | 기준 | 결과 |
-|------|------|------|
-| 수익성 | 실질 수익률 10%↑ 안정 / 0~10% 보통 / 0↓ 위험 | → {profit_status} |
-| 유동성 | 현금흐름 0↑ 안정 / 음수 위험 | → {cash_status} |
-| 비용구조 | 인건비율 40~50 안정 / 50~60 보통 / 60↑ 위험 | → {labor_status} |
-| 부채건전성 | 정액권 잔액비율 30↓ 안정 / 30~60 보통 / 60↑ 위험 | → {debt_status} |
-
-종합등급 → {final_grade}  
-(안정: 모든 항목 양호 / 보통: 1~2 경고 / 위험: 3개 이상 위험)
+| 구분 | 지표 | 기준 | 평가 |
+|------|------|------|------|
+| 수익성 | 실질 수익률 | ≥10% 안정 / 0~10% 보통 / <0% 위험 | {profit_status} |
+| 유동성 | 현금흐름 | ≥0 안정 / 음수 위험 | {cash_status} |
+| 비용구조 | 인건비율 | 40~50% 안정 / 50~60% 보통 / >60% 위험 | {labor_status} |
+| 부채건전성 | 정액권 잔액비율 | ≤30% 안정 / 30~60% 보통 / >60% 위험 | {debt_status} |
+| 지출효율 | 고정비율+변동비율 | 합계 ≤70% 안정 / 70~90% 보통 / >90% 위험 | {efficiency_status} |
+| 종합등급 | — | A: 위험 없음 / B: 1~2항목 위험 / C: 3개 이상 위험 | **{final_grade}** |
 
 ──────────────────────────────
-[Ⅳ. 자동 해석 문장]
+[Ⅳ. 자동 해석]
 
 “{branch}의 실현매출은 {realized_sales:,.0f}원이며,  
-회계상 순이익은 {net_profit:,.0f}원,  
-대표 기준 실질 순이익은 {real_profit:,.0f}원({real_profit_rate:.1f}%)입니다.  
-현금흐름은 {cashflow:,.0f}원으로 {cash_status} 상태이며,  
-인건비율 {labor_rate:.1f}%, 정액권 잔액비율 {pass_balance_rate:.1f}%를 종합할 때  
-전반적인 재무건전성은 **{final_grade} 등급 ({overall_status})** 으로 판단됩니다.”
-
-──────────────────────────────
-[Ⅴ. 검증 요청 안내]
-
-⚙️ GPT는 반드시 위 모든 입력값을 그대로 출력해야 하며,  
-대표님이 수치 하나라도 다를 경우 “입력 불일치 가능성 있음”을 표시해야 합니다.  
-또한 각 항목의 차이를 ‘계산식 vs 입력 데이터’로 비교해 표시하십시오.
+실질 수익률은 {real_profit_rate:.1f}%로 {profit_status} 수준입니다.  
+현금흐름 {cashflow:,.0f}원, 인건비율 {labor_rate:.1f}%,  
+정액권 잔액비율 {pass_balance_rate:.1f}%를 종합할 때  
+전반적인 재무건전성은 **{final_grade} 등급 ({summary_status})** 으로 평가됩니다.”
 """
 
-    # 6️⃣ GPT 호출 (모델: gpt-4o)
+    # === 6️⃣ GPT 호출 ===
     try:
         resp = openai_client.chat.completions.create(
             model="gpt-4o",
-            temperature=0.1,
-            max_tokens=1500,
+            temperature=0.2,
+            max_tokens=1800,
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "당신은 미용실 회계·재무 검증 전문가입니다. "
-                        "입력된 데이터를 단 하나도 생략하지 않고 그대로 출력하며, "
-                        "모든 계산 과정을 검증하는 보고서를 작성하세요. "
-                        "요약하지 말고 단계별로 모든 수식을 풀어야 합니다."
+                        "당신은 미용실 재무건전성 분석 전문가입니다. "
+                        "입력된 수치를 기반으로 표준 회계 분석 형식으로 진단표를 작성하십시오. "
+                        "표를 포함하고, 각 지표별로 안정/보통/위험 평가를 반드시 포함하십시오."
                     ),
                 },
                 {"role": "user", "content": prompt},
             ],
             timeout=120,
         )
-        analysis_text = resp.choices[0].message.content
+        gpt_text = resp.choices[0].message.content
     except Exception as e:
-        print("❌ [GPT 호출 실패]", e)
-        raise HTTPException(status_code=500, detail=f"GPT 분석 요청 실패: {e}")
+        print("❌ GPT 호출 오류:", e)
+        raise HTTPException(status_code=500, detail=f"GPT 분석 실패: {e}")
 
-    # 7️⃣ 결과 반환
+    # === 7️⃣ 결과 반환 ===
     return {
         "branch": branch,
         "period": period,
-        "analysis": analysis_text,
+        "analysis": gpt_text,
         "calculated": {
             "realized_sales": realized_sales,
             "real_profit": real_profit,
@@ -2102,15 +2075,16 @@ async def salon_analysis(
             "var_rate": var_rate,
             "fixed_rate": fixed_rate,
             "pass_balance_rate": pass_balance_rate,
+            "efficiency_rate": efficiency_rate,
             "profit_status": profit_status,
             "cash_status": cash_status,
             "labor_status": labor_status,
             "debt_status": debt_status,
+            "efficiency_status": efficiency_status,
             "final_grade": final_grade,
-            "overall_status": overall_status,
+            "summary_status": summary_status,
         },
     }
-
 
 # ✅ 사업자 유입총액 계산 API (내수금, 기타수입 제외)
 @app.post('/transactions/income-filtered')
