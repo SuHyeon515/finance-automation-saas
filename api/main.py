@@ -1932,6 +1932,7 @@ async def salon_analysis(
     pay_sales = sum(m.get("pay_sales", 0) for m in months)
     cash_sales = sum(m.get("cash_sales", 0) for m in months)
     account_sales = sum(m.get("account_sales", 0) for m in months)
+    etc_sales = cash_sales + account_sales   # ✅ 추가됨
     total_sales = card_sales + pay_sales + cash_sales + account_sales
 
     pass_paid = sum(m.get("pass_paid", 0) for m in months)
