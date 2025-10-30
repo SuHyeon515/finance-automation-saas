@@ -1910,183 +1910,212 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         print("⚠️ 통장 잔액 조회 실패:", e)
         raise HTTPException(status_code=500, detail=str(e))
     
+# === 제이가빈 재무분석 자동리포트 ===    
 @app.post("/gpt/salon-analysis")
 async def salon_analysis(
     body: dict = Body(...),
     authorization: Optional[str] = Header(None),
 ):
     """
-    💼 제이가빈 실무형 재무건전성 진단 (운영 + 추세 + 비교 + 저장)
-    - 단일 월 또는 다중 월(months 배열)을 입력받아 GPT가 종합 진단 보고서를 생성합니다.
-    - 분석 결과는 Supabase DB(analyses 테이블)에 자동 저장됩니다.
+    💈 제이가빈 재무분석 자동리포트 (실데이터 기반 + 예측 확장 버전)
+    - 단일월: 손익분석 + KPI 달성률
+    - 다월: 월별 비교 + 추세분석 + 예측 + KPI 평가
     """
     if not openai_client:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY 미설정")
 
-    # === 1️⃣ 기본 데이터 추출 ===
     user_id = await get_user_id(authorization)
     branch = body.get("branch", "지점명 미입력")
     months = body.get("months", [])
     if not months:
-        raise HTTPException(status_code=400, detail="months 데이터가 필요합니다.")
+        raise HTTPException(status_code=400, detail="months 데이터 누락")
 
-    # === 2️⃣ 각 월별 주요 계산 ===
+    designers = body.get("designers", [])
+    interns = body.get("interns", 0)
+    goal = body.get("goal", {})
+
+    # === 1️⃣ 실데이터 기반 월별 계산 ===
     monthly_results = []
     for m in months:
-        total_sales = float(m.get("total_sales", 0))
+        month = m.get("month", "YYYY-MM")
+
+        card_sales = float(m.get("card_sales", 0))
+        pay_sales = float(m.get("pay_sales", 0))
+        cash_sales = float(m.get("cash_sales", 0))
+        account_sales = float(m.get("account_sales", 0))
+        total_sales = card_sales + pay_sales + cash_sales + account_sales
+
         pass_paid = float(m.get("pass_paid", 0))
         pass_used = float(m.get("pass_used", 0))
         fixed_exp = float(m.get("fixed_exp", 0))
         var_exp = float(m.get("var_exp", 0))
         labor_cost = float(m.get("labor_cost", 0))
-        owner_dividend = float(m.get("owner_dividend", 0))
-        bank_in = float(m.get("bank_in", 0))
-        bank_out = float(m.get("bank_out", 0))
+        visitors_total = int(m.get("visitors_total", 0))
 
         realized_sales = (total_sales - pass_paid) + pass_used
         pass_balance = pass_paid - pass_used
-        net_profit = realized_sales - (fixed_exp + var_exp + labor_cost)
-        real_profit = net_profit + owner_dividend
-        real_profit_rate = (real_profit / realized_sales * 100) if realized_sales else 0
-        cashflow = bank_in - bank_out
+        redemption_rate = (pass_used / pass_paid * 100) if pass_paid else 0
         labor_rate = (labor_cost / realized_sales * 100) if realized_sales else 0
-        var_rate = (var_exp / realized_sales * 100) if realized_sales else 0
-        fixed_rate = (fixed_exp / realized_sales * 100) if realized_sales else 0
-        efficiency_rate = fixed_rate + var_rate
+        net_profit = realized_sales - (fixed_exp + var_exp + labor_cost)
+        real_profit_rate = (net_profit / realized_sales * 100) if realized_sales else 0
+        per_visitor = (realized_sales / visitors_total) if visitors_total else 0
 
         monthly_results.append({
-            "month": m.get("month"),
+            "month": month,
             "realized_sales": realized_sales,
-            "real_profit": real_profit,
+            "net_profit": net_profit,
             "real_profit_rate": real_profit_rate,
-            "cashflow": cashflow,
             "labor_rate": labor_rate,
-            "fixed_rate": fixed_rate,
-            "var_rate": var_rate,
-            "efficiency_rate": efficiency_rate,
+            "redemption_rate": redemption_rate,
+            "pass_balance": pass_balance,
+            "per_visitor": per_visitor,
         })
 
-    # === 3️⃣ 월별 비교 계산 ===
+    # === 2️⃣ 추세 분석용 전월 대비 변화율 ===
     comparisons = []
     for i in range(1, len(monthly_results)):
-        prev, curr = monthly_results[i-1], monthly_results[i]
+        prev, curr = monthly_results[i - 1], monthly_results[i]
         growth_sales = ((curr["realized_sales"] - prev["realized_sales"]) / prev["realized_sales"] * 100) if prev["realized_sales"] else 0
-        growth_profit = ((curr["real_profit"] - prev["real_profit"]) / abs(prev["real_profit"]) * 100) if prev["real_profit"] else 0
+        growth_profit = ((curr["net_profit"] - prev["net_profit"]) / abs(prev["net_profit"]) * 100) if prev["net_profit"] else 0
+        growth_labor = curr["labor_rate"] - prev["labor_rate"]
+        growth_redemp = curr["redemption_rate"] - prev["redemption_rate"]
         comparisons.append({
-            "from": prev["month"],
-            "to": curr["month"],
+            "from": prev["month"], "to": curr["month"],
             "sales_growth_rate": growth_sales,
             "profit_growth_rate": growth_profit,
+            "labor_rate_diff": growth_labor,
+            "redemption_diff": growth_redemp,
         })
 
-    avg_profit_rate = np.mean([m["real_profit_rate"] for m in monthly_results])
-    avg_efficiency = np.mean([m["efficiency_rate"] for m in monthly_results])
+    # === 3️⃣ 전체 평균 계산 ===
+    avg_sales = np.mean([m["realized_sales"] for m in monthly_results])
+    avg_profit = np.mean([m["net_profit"] for m in monthly_results])
+    avg_labor = np.mean([m["labor_rate"] for m in monthly_results])
+    avg_redemption = np.mean([m["redemption_rate"] for m in monthly_results])
+    avg_per_visitor = np.mean([m["per_visitor"] for m in monthly_results])
 
-    # === 4️⃣ GPT 프롬프트 구성 ===
+    # === 4️⃣ 단순 추세 기반 다음달 예측치 ===
+    if len(monthly_results) >= 2:
+        sales_growth_avg = np.mean([c["sales_growth_rate"] for c in comparisons])
+        profit_growth_avg = np.mean([c["profit_growth_rate"] for c in comparisons])
+        next_sales = avg_sales * (1 + sales_growth_avg / 100)
+        next_profit = avg_profit * (1 + profit_growth_avg / 100)
+    else:
+        next_sales = avg_sales
+        next_profit = avg_profit
+
+    # === 5️⃣ KPI 목표 비교 ===
+    goal_sales = float(goal.get("sales", 0))
+    goal_profit = float(goal.get("profit", 0))
+    goal_redemption = float(goal.get("redemption", 95))
+    goal_labor = float(goal.get("labor_rate", 40))
+    goal_per_visitor = float(goal.get("per_visitor", 0))
+
+    kpi = {
+        "달성률_매출": (avg_sales / goal_sales * 100) if goal_sales else 0,
+        "달성률_순이익": (avg_profit / goal_profit * 100) if goal_profit else 0,
+        "달성률_소진률": (avg_redemption / goal_redemption * 100) if goal_redemption else 0,
+        "달성률_인건비": (goal_labor / avg_labor * 100) if avg_labor else 0,
+        "달성률_객단가": (avg_per_visitor / goal_per_visitor * 100) if goal_per_visitor else 0,
+    }
+
+    # === 6️⃣ GPT 프롬프트 구성 ===
+    start_month = months[0].get("month")
+    end_month = months[-1].get("month")
     table_text = "\n".join([
-        f"| {m['month']} | ₩{m['realized_sales']:,.0f} | ₩{m['real_profit']:,.0f} | {m['real_profit_rate']:.1f}% | {m['cashflow']:,.0f} | {m['labor_rate']:.1f}% | {m['efficiency_rate']:.1f}% |"
+        f"| {m['month']} | ₩{m['realized_sales']:,.0f} | ₩{m['net_profit']:,.0f} | {m['real_profit_rate']:.1f}% | {m['labor_rate']:.1f}% | {m['redemption_rate']:.1f}% | ₩{m['per_visitor']:,.0f} |"
         for m in monthly_results
     ])
     compare_text = "\n".join([
-        f"- {c['from']} → {c['to']} : 매출 {c['sales_growth_rate']:+.1f}%, 순이익 {c['profit_growth_rate']:+.1f}%"
+        f"- {c['from']} → {c['to']}: 매출 {c['sales_growth_rate']:+.1f}%, 이익 {c['profit_growth_rate']:+.1f}%, 인건비율 {c['labor_rate_diff']:+.1f}p, 소진률 {c['redemption_diff']:+.1f}p"
         for c in comparisons
     ])
 
     prompt = f"""
-💼 제이가빈 실무형 재무건전성 진단 v2 (운영 + 추세 + 비교)
+💈 제이가빈 실데이터 기반 재무분석 리포트 ({branch}, {start_month}~{end_month})
 
-당신은 미용실 전문 **재무분석 AI 전문가**입니다.
-아래의 다중월 데이터를 기반으로, 지점의 재무건전성과 성장 추세를 평가하십시오.
-
-📌 입력 데이터는 “운영 데이터 기반”입니다. (손익계산서 없음)
-📌 결과는 반드시 표 형태 + 비교 요약 + 총평 순으로 구성하십시오.
-📌 월별 실현매출, 순이익, 수익률, 인건비율, 효율지표를 중심으로 해석하십시오.
+당신은 미용실 전문 재무분석 AI입니다.
+입력된 **실제 월별 운영데이터**를 기반으로 손익, 인건비, 정액권 리스크, 성장 추세를 분석하고  
+다음달 경영 방향을 제시하십시오.  
 
 ──────────────────────────────
-[Ⅰ. 지점 기본정보]
-지점명: {branch}
-분석기간: {months[0].get('month')} ~ {months[-1].get('month')}
-총월수: {len(monthly_results)}개월
-
-──────────────────────────────
-[Ⅱ. 월별 주요 지표 요약]
-
-| 월 | 실현매출 | 실질순이익 | 수익률 | 현금흐름 | 인건비율 | 지출효율(%) |
-|------|-------------|-------------|----------|------------|------------|--------------|
+[Ⅰ. 월별 요약]
+| 월 | 실현매출 | 순이익 | 수익률 | 인건비율 | 소진률 | 객단가 |
+|------|------|------|------|------|------|------|
 {table_text}
 
 ──────────────────────────────
-[Ⅲ. 월간 증감 비교]
+[Ⅱ. 전월 대비 추세]
 {compare_text}
 
 ──────────────────────────────
-[Ⅳ. 주요 통계]
-- 평균 실질 수익률: {avg_profit_rate:.1f}%
-- 평균 지출효율(고정+변동): {avg_efficiency:.1f}%
-- 가장 수익률이 높은 달: {max(monthly_results, key=lambda x: x['real_profit_rate'])['month']}
-- 가장 수익률이 낮은 달: {min(monthly_results, key=lambda x: x['real_profit_rate'])['month']}
+[Ⅲ. KPI 평균]
+매출 달성률: {kpi['달성률_매출']:.1f}%  
+순이익 달성률: {kpi['달성률_순이익']:.1f}%  
+인건비 효율 달성률: {kpi['달성률_인건비']:.1f}%  
+정액권 소진률: {kpi['달성률_소진률']:.1f}%  
+객단가 달성률: {kpi['달성률_객단가']:.1f}%  
 
 ──────────────────────────────
-[Ⅴ. 작성 규칙]
-- 표와 요약 비교 결과를 반드시 포함
-- 각 월별 상태(안정/보통/위험) 판단
-- 마지막에 전체 평가 (A/B/C 등급 + 간단한 경영 제언)
+[Ⅳ. 예측 요약]
+- 최근 평균 매출 성장률: {np.mean([c['sales_growth_rate'] for c in comparisons]):+.1f}%  
+- 다음달 예상 매출: ₩{next_sales:,.0f}  
+- 다음달 예상 순이익: ₩{next_profit:,.0f}  
+- 추세 방향: {"상승세" if next_sales > avg_sales else "보합" if abs(next_sales-avg_sales)<1 else "하락세"}
+
+──────────────────────────────
+[Ⅴ. 분석 요청]
+1️⃣ 월별 실데이터 기반 추세 해석  
+2️⃣ 인건비율 및 소진률 중심의 효율성 분석  
+3️⃣ 현 추세를 기반으로 한 1개월 후 예측 해석  
+4️⃣ “안정 / 보통 / 위험”으로 매장 상태 등급 판정  
+5️⃣ 구체적인 개선 제언 제시
 """
 
-    # === 5️⃣ GPT 호출 ===
+    # === 7️⃣ GPT 호출 ===
     try:
         resp = openai_client.chat.completions.create(
             model="gpt-4o",
-            temperature=0.25,
-            max_tokens=2200,
+            temperature=0.3,
+            max_tokens=2600,
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "당신은 미용실 재무건전성 분석 전문가입니다. "
-                        "월별 실현매출, 순이익, 수익률, 인건비율, 효율비율의 변화를 해석하고, "
-                        "경영자의 의사결정에 도움되는 종합 보고서를 작성하십시오."
-                    ),
-                },
+                {"role": "system", "content": "당신은 미용실 운영데이터 기반 재무분석 전문가입니다. 실데이터에 근거해 수치 기반 해석을 하십시오."},
                 {"role": "user", "content": prompt},
             ],
             timeout=120,
         )
         gpt_text = resp.choices[0].message.content
     except Exception as e:
-        print("❌ GPT 호출 오류:", e)
         raise HTTPException(status_code=500, detail=f"GPT 분석 실패: {e}")
 
-    # === 6️⃣ Supabase 저장 ===
-    title_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    title = f"{branch} / {title_date} / 재무건전성 진단 보고서 (v2)"
-
+    # === 8️⃣ 저장 ===
     try:
-        ins = (
-            supabase.table("analyses")
-            .insert({
-                "user_id": user_id,
-                "branch": branch,
-                "title": title,
-                "params": body,
-                "result": gpt_text,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            })
-            .execute()
-        )
-        analysis_id = ins.data[0]["id"] if ins and ins.data else None
+        title = f"{branch} ({start_month}~{end_month}) 실데이터 리포트"
+        supabase.table("analyses").insert({
+            "user_id": user_id,
+            "branch": branch,
+            "title": title,
+            "content": gpt_text,
+        }).execute()
     except Exception as e:
-        print("❌ [Supabase 저장 실패]", e)
-        analysis_id = None
+        print("⚠️ DB 저장 실패:", e)
 
-    # === 7️⃣ 반환 ===
+    # === 9️⃣ 반환 ===
     return {
         "branch": branch,
-        "analysis_id": analysis_id,
+        "period": f"{start_month}~{end_month}",
+        "analysis": gpt_text,
         "months": monthly_results,
         "comparisons": comparisons,
-        "analysis": gpt_text,
-        "title": title,
+        "predicted": {"next_sales": next_sales, "next_profit": next_profit},
+        "averages": {
+            "sales": avg_sales,
+            "profit": avg_profit,
+            "labor_rate": avg_labor,
+            "redemption_rate": avg_redemption,
+            "per_visitor": avg_per_visitor,
+        },
+        "kpi": kpi,
     }
 
 # ✅ 사업자 유입총액 계산 API (내수금, 기타수입 제외)
