@@ -17,6 +17,8 @@ from dotenv import load_dotenv
 from urllib.parse import quote
 from pydantic import BaseModel, field_validator
 import re
+import jwt
+import requests
 
 load_dotenv()
 
@@ -72,20 +74,50 @@ def build_download_headers(filename: str) -> dict:
     }
 
 # === Auth ===
+SUPABASE_JWT_PUBLIC_KEY = None
+try:
+    jwks_url = f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json"
+    jwks = requests.get(jwks_url, timeout=5).json()
+    if jwks.get("keys"):
+        SUPABASE_JWT_PUBLIC_KEY = jwt.algorithms.RSAAlgorithm.from_jwk(jwks["keys"][0])
+        print("🔑 Supabase JWT public key 로드 완료")
+except Exception as e:
+    print("⚠️ Supabase JWT public key 로드 실패:", e)
+
 async def get_user_id(authorization: Optional[str]) -> str:
-    if authorization and authorization.lower().startswith('bearer '):
-        token = authorization.split(' ', 1)[1]
+    """
+    ✅ Supabase Auth 토큰을 로컬에서 decode (매 요청시 외부 HTTP 호출 없음)
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        if DEV_USER_ID:
+            return DEV_USER_ID
+        raise HTTPException(status_code=401, detail="Missing Authorization Bearer token")
+
+    token = authorization.split(" ", 1)[1]
+
+    # 1️⃣ Public key가 없으면 fallback (예: local dev)
+    if SUPABASE_JWT_PUBLIC_KEY is None:
         url = f"{SUPABASE_URL}/auth/v1/user"
-        headers = {'Authorization': f'Bearer {token}', 'apikey': SUPABASE_ANON_KEY}
+        headers = {"Authorization": f"Bearer {token}", "apikey": SUPABASE_ANON_KEY}
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(url, headers=headers)
             if r.status_code != 200:
-                raise HTTPException(status_code=401, detail='Invalid token')
-            return r.json()['id']
-    if DEV_USER_ID:
-        return DEV_USER_ID
-    raise HTTPException(status_code=401, detail='Missing Authorization Bearer token')
+                raise HTTPException(status_code=401, detail="Invalid token")
+            return r.json()["id"]
 
+    # 2️⃣ 정상 케이스: JWT 로컬 검증
+    try:
+        payload = jwt.decode(token, SUPABASE_JWT_PUBLIC_KEY, algorithms=["RS256"])
+        user_id = payload.get("sub")
+        if not user_id:
+            raise ValueError("user_id(sub) 누락")
+        return user_id
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except Exception as e:
+        print("⚠️ JWT decode 실패:", e)
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
 async def get_user_role(authorization: Optional[str]) -> Optional[str]:
     """JWT 토큰에서 role(admin/viewer/user)을 추출"""
     if not authorization:
