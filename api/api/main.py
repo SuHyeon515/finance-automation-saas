@@ -2039,19 +2039,36 @@ async def salon_analysis(
         running_pass_balance += pass_paid - pass_used
         pass_balance = max(running_pass_balance, 0.0)
 
-        # === 결제수단별 실수료율 계산 (정확한 실무 방식) ===
-        card_inflow = float(m.get("card_inflow", 0) or 0)
-        pay_inflow  = float(m.get("pay_inflow", 0) or 0)
+        # === 결제수단별 수수료율 계산 (카테고리 대비 실매출 비교 방식) ===
+        # 사용자가 입력한 원본 매장 매출 데이터 (입금 기준)
+        input_card_sales = float(m.get("input_card_sales", 0) or 0)
+        input_pay_sales  = float(m.get("input_pay_sales", 0) or 0)
 
-        # 개별 수수료율 계산
-        card_commission_rate = ((card_sales - card_inflow) / card_sales * 100) if card_sales > 0 else 0
-        pay_commission_rate  = ((pay_sales - pay_inflow) / pay_sales * 100) if pay_sales > 0 else 0
+        # 리포트 내부 카테고리 기준 매출 (실제 매출 데이터)
+        category_card_sales = float(m.get("card_sales", 0) or 0)
+        category_pay_sales  = float(m.get("pay_sales", 0) or 0)
 
-        # 가중 평균 수수료율 (카드 + 페이)
-        commission_rate = (
-            (card_sales * card_commission_rate + pay_sales * pay_commission_rate)
-            / (card_sales + pay_sales)
-        ) if (card_sales + pay_sales) > 0 else 0
+        # 각각의 수수료율 계산
+        card_commission_rate = (
+            ((input_card_sales - category_card_sales) / input_card_sales) * 100
+            if input_card_sales > 0 else 0
+        )
+        pay_commission_rate = (
+            ((input_pay_sales - category_pay_sales) / input_pay_sales) * 100
+            if input_pay_sales > 0 else 0
+        )
+
+        # 가중평균 수수료율
+        total_input = input_card_sales + input_pay_sales
+        if total_input > 0:
+            commission_rate = (
+                (input_card_sales * card_commission_rate + input_pay_sales * pay_commission_rate)
+                / total_input
+            )
+        else:
+            commission_rate = 0
+
+        commission_rate = clamp_percent(commission_rate)
 
         # 수수료율 범위 보정
         commission_rate = clamp_percent(commission_rate)
