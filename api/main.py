@@ -2029,7 +2029,15 @@ async def salon_analysis(
 
         # === 주요 비율 및 계산식 ===
         redemption_rate = (pass_used / pass_paid * 100) if pass_paid else 0
-        commission_rate = ((1 - (bank_inflow / total_sales)) * 100) if total_sales else 0
+        # 💥 수수료율 계산 자동 분기 (음수 절대 불가)
+        if total_sales == 0:
+            commission_rate = 0
+        elif bank_inflow <= total_sales:
+            # 정상적인 수수료 구조 (입금 < 매출)
+            commission_rate = ((1 - (bank_inflow / total_sales)) * 100)
+        else:
+            # 입금이 매출보다 많을 경우 (보조금·역공제·중복집계 등)
+            commission_rate = ((bank_inflow - total_sales) / total_sales * 100)
         labor_rate = (labor_cost / realized_sales * 100) if realized_sales else 0
 
         # === 순이익 및 실질 순이익 ===
