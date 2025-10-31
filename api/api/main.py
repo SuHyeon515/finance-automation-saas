@@ -2029,15 +2029,11 @@ async def salon_analysis(
 
         # === 주요 비율 및 계산식 ===
         redemption_rate = (pass_used / pass_paid * 100) if pass_paid else 0
-        # 💥 수수료율 계산 자동 분기 (음수 절대 불가)
-        if total_sales == 0:
-            commission_rate = 0
-        elif bank_inflow <= total_sales:
-            # 정상적인 수수료 구조 (입금 < 매출)
-            commission_rate = ((1 - (bank_inflow / total_sales)) * 100)
+        # ✅ 실무 기준 수수료율 (총매출 - 입금액) / 총매출
+        if total_sales > 0:
+            commission_rate = ((total_sales - bank_inflow) / total_sales * 100)
         else:
-            # 입금이 매출보다 많을 경우 (보조금·역공제·중복집계 등)
-            commission_rate = ((bank_inflow - total_sales) / total_sales * 100)
+            commission_rate = 0
         labor_rate = (labor_cost / realized_sales * 100) if realized_sales else 0
 
         # === 순이익 및 실질 순이익 ===
@@ -2150,12 +2146,12 @@ async def salon_analysis(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"GPT 분석 실패: {e}")
 
-    # === 결과 저장 ===
+        # === 결과 저장 (로컬 JSON) ===
     try:
         title = f"{branch} ({start_month}~{end_month}) 실질 손익 리포트"
         filename = f"{branch}_{start_month}_{end_month}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        BASE_DIR = os.getcwd()  # Render/Vercel 환경 호환
         REPORT_DIR = os.path.join(BASE_DIR, "data", "reports")
         os.makedirs(REPORT_DIR, exist_ok=True)
         file_path = os.path.join(REPORT_DIR, filename)
@@ -2185,13 +2181,30 @@ async def salon_analysis(
 
         print(f"✅ 분석결과 로컬 저장 완료: {file_path}")
 
-        # ☁️ Supabase 저장
-        supabase.table("analyses").insert({
-            "user_id": user_id,
-            "branch": branch,
-            "title": title,
-            "content": gpt_text,
-        }).execute()
+    except Exception as e:
+        print(f"⚠️ 로컬 파일 저장 실패: {e}")
+
+    # === ☁️ Supabase 저장 (created_at 포함 + 오류 감지) ===
+    try:
+        insert_res = (
+            supabase.table("analyses")
+            .insert({
+                "user_id": user_id,
+                "branch": branch,
+                "title": title,
+                "content": gpt_text,
+                "created_at": datetime.now().isoformat()
+            })
+            .execute()
+        )
+
+        if not insert_res.data:
+            raise HTTPException(status_code=500, detail="Supabase 저장 실패 (data 비어있음)")
+
+        print(f"✅ Supabase 저장 완료: {insert_res.data}")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Supabase 저장 실패: {e}")
 
     except Exception as e:
         print("⚠️ DB/파일 저장 실패:", e)
