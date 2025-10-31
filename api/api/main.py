@@ -2017,7 +2017,45 @@ async def salon_analysis(
         if labor_cost == 0:
             labor_cost = fetch_payroll(branch, month)
 
-        # === 실현매출 계산 (중복 차감 방지 로직 포함) ===
+        # ✅ 결제수단별 실수료율 계산 (음수 불가)
+        card_inflow = float(m.get("card_inflow", 0))
+        pay_inflow = float(m.get("pay_inflow", 0))
+
+        card_commission_rate = ((card_sales - card_inflow) / card_sales * 100) if card_sales > 0 else 0
+        pay_commission_rate = ((pay_sales - pay_inflow) / pay_sales * 100) if pay_sales > 0 else 0
+
+        # ✅ 전체 평균 수수료율 (가중평균)
+        commission_rate = (
+            ((card_sales * card_commission_rate) + (pay_sales * pay_commission_rate)) /
+            (card_sales + pay_sales)
+        ) if (card_sales + pay_sales) > 0 else 0
+
+        # === 주요 비율 및 계산식 ===
+        redemption_rate = (pass_used / pass_paid * 100) if pass_paid else 0
+
+        # ✅ 결제수단별 실수료율 계산 (정확한 실무 방식)
+        card_inflow = float(m.get("card_inflow", 0))
+        pay_inflow = float(m.get("pay_inflow", 0))
+
+        card_commission_rate = ((card_sales - card_inflow) / card_sales * 100) if card_sales > 0 else 0
+        pay_commission_rate = ((pay_sales - pay_inflow) / pay_sales * 100) if pay_sales > 0 else 0
+
+        # ✅ 전체 평균 수수료율 (가중평균)
+        commission_rate = (
+            ((card_sales * card_commission_rate) + (pay_sales * pay_commission_rate)) /
+            (card_sales + pay_sales)
+        ) if (card_sales + pay_sales) > 0 else 0
+
+        # ✅ 인건비율
+        labor_rate = (labor_cost / realized_sales * 100) if realized_sales else 0
+
+        # === 정액권 잔액 (누적 반영) ===
+        running_pass_balance += pass_paid - pass_used
+        pass_balance = max(running_pass_balance, 0)  # 음수 방지
+
+        # === 주요 비율 및 계산식 ===
+        redemption_rate = (pass_used / pass_paid * 100) if pass_paid else 0
+                # === 실현매출 계산 (중복 차감 방지 로직 포함) ===
         if total_sales < (pass_paid + pass_used):
             realized_sales = total_sales + pass_used
         else:
@@ -2027,13 +2065,21 @@ async def salon_analysis(
         running_pass_balance += pass_paid - pass_used
         pass_balance = max(running_pass_balance, 0)  # 음수 방지
 
-        # === 주요 비율 및 계산식 ===
+        # === 결제수단별 실수료율 계산 (정확한 실무 방식) ===
+        card_inflow = float(m.get("card_inflow", 0))
+        pay_inflow = float(m.get("pay_inflow", 0))
+
+        card_commission_rate = ((card_sales - card_inflow) / card_sales * 100) if card_sales > 0 else 0
+        pay_commission_rate = ((pay_sales - pay_inflow) / pay_sales * 100) if pay_sales > 0 else 0
+
+        # ✅ 전체 평균 수수료율 (가중평균)
+        commission_rate = (
+            ((card_sales * card_commission_rate) + (pay_sales * pay_commission_rate)) /
+            (card_sales + pay_sales)
+        ) if (card_sales + pay_sales) > 0 else 0
+
+        # === 주요 비율 ===
         redemption_rate = (pass_used / pass_paid * 100) if pass_paid else 0
-        # ✅ 실무 기준 수수료율 (총매출 - 입금액) / 총매출
-        if total_sales > 0:
-            commission_rate = ((total_sales - bank_inflow) / total_sales * 100)
-        else:
-            commission_rate = 0
         labor_rate = (labor_cost / realized_sales * 100) if realized_sales else 0
 
         # === 순이익 및 실질 순이익 ===
