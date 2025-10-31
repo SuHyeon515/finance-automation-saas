@@ -2146,7 +2146,7 @@ async def salon_analysis(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"GPT 분석 실패: {e}")
 
-        # === 결과 저장 (로컬 JSON) ===
+    # === 💾 결과 저장 (로컬 JSON) ===
     try:
         title = f"{branch} ({start_month}~{end_month}) 실질 손익 리포트"
         filename = f"{branch}_{start_month}_{end_month}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -2198,16 +2198,19 @@ async def salon_analysis(
             .execute()
         )
 
+        print("📄 Supabase 응답:", insert_res)
+
         if not insert_res.data:
-            raise HTTPException(status_code=500, detail="Supabase 저장 실패 (data 비어있음)")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Supabase 저장 실패: {insert_res.error or 'data 비어있음'}"
+            )
 
         print(f"✅ Supabase 저장 완료: {insert_res.data}")
 
     except Exception as e:
+        print(f"❌ Supabase 저장 실패: {e}")
         raise HTTPException(status_code=500, detail=f"Supabase 저장 실패: {e}")
-
-    except Exception as e:
-        print("⚠️ DB/파일 저장 실패:", e)
 
     # === 결과 반환 ===
     return {
