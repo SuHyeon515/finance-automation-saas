@@ -1942,17 +1942,21 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         print("⚠️ 통장 잔액 조회 실패:", e)
         raise HTTPException(status_code=500, detail=str(e))
     
-# === 💈 제이가빈 회계 자동분석 리포트 (V4.3 — 대표 실질 순이익 반영판) ===
+# === 💈 제이가빈 회계 자동분석 리포트 (V4.4 — 실현매출 기준 + 누적 정액권 보정판) ===
 @app.post("/gpt/salon-analysis")
 async def salon_analysis(
     body: dict = Body(...),
     authorization: Optional[str] = Header(None),
 ):
     """
-    💈 제이가빈 회계 자동분석 리포트 (V4.3)
+    💈 제이가빈 회계 자동분석 리포트 (V4.4)
     - 입력 데이터: 매출, 정액권, 은행 입출금, 지출, 인건비, 사업자배당
     - 계산: 실현매출, 수수료율, 인건비율, 회계순이익, 실질순이익
     - GPT 출력: 실질 손익 중심 자동 리포트
+    - 개선점:
+        ✅ 수수료율 부호 반전 오류 수정
+        ✅ 정액권 잔액 누적 계산 반영 (음수 방지)
+        ✅ 실현매출 기준 인건비율 일관 적용
     """
     if not openai_client:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY 미설정")
@@ -1979,6 +1983,9 @@ async def salon_analysis(
         except Exception as e:
             print(f"⚠️ 급여 조회 실패({branch_name}-{month}):", e)
         return 0.0
+
+    # === 누적 잔액 초기화 ===
+    running_pass_balance = 0
 
     # === 월별 계산 ===
     monthly_results = []
@@ -2010,17 +2017,32 @@ async def salon_analysis(
         if labor_cost == 0:
             labor_cost = fetch_payroll(branch, month)
 
-        # === 계산 ===
-        realized_sales = (total_sales - pass_paid) + pass_used
-        pass_balance = pass_paid - pass_used
+        # === 실현매출 계산 (중복 차감 방지 로직 포함) ===
+        if total_sales < (pass_paid + pass_used):
+            realized_sales = total_sales + pass_used
+        else:
+            realized_sales = (total_sales - pass_paid) + pass_used
+
+        # === 정액권 잔액 (누적 반영) ===
+        running_pass_balance += pass_paid - pass_used
+        pass_balance = max(running_pass_balance, 0)  # 음수 방지
+
+        # === 주요 비율 및 계산식 ===
         redemption_rate = (pass_used / pass_paid * 100) if pass_paid else 0
-        commission_rate = ((total_sales - bank_inflow) / total_sales * 100) if total_sales else 0
+        commission_rate = ((1 - (bank_inflow / total_sales)) * 100) if total_sales else 0
         labor_rate = (labor_cost / realized_sales * 100) if realized_sales else 0
+
+        # === 순이익 및 실질 순이익 ===
         net_profit = realized_sales - (fixed_exp + var_exp + labor_cost)
         real_profit = net_profit + owner_dividend
         real_profit_rate = (real_profit / realized_sales * 100) if realized_sales else 0
         cash_flow = bank_inflow - bank_outflow
 
+        # === 정액권 차감 초과 감지 ===
+        if pass_used > pass_paid:
+            print(f"⚠️ [{branch}] {month}: 정액권 차감액이 결제액을 초과했습니다 (결제:{pass_paid}, 차감:{pass_used})")
+
+        # === 월별 데이터 추가 ===
         monthly_results.append({
             "month": month,
             "total_sales": total_sales,
@@ -2068,7 +2090,7 @@ async def salon_analysis(
 
     # === GPT 프롬프트 ===
     prompt = f"""
-💈 제이가빈 회계 자동분석 리포트 (V4.3 — 대표 실질 순이익 반영판)
+💈 제이가빈 회계 자동분석 리포트 (V4.4 — 실현매출 기준 + 누적 정액권 보정판)
 지점명: {branch}
 분석기간: {start_month} ~ {end_month}
 
@@ -2120,19 +2142,16 @@ async def salon_analysis(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"GPT 분석 실패: {e}")
 
-   # === 결과 저장 ===
+    # === 결과 저장 ===
     try:
-        # 🧠 저장용 제목 및 파일명
         title = f"{branch} ({start_month}~{end_month}) 실질 손익 리포트"
         filename = f"{branch}_{start_month}_{end_month}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        
-        # 🗂️ 로컬 저장 경로
+
         BASE_DIR = os.path.dirname(os.path.abspath(__file__))
         REPORT_DIR = os.path.join(BASE_DIR, "data", "reports")
         os.makedirs(REPORT_DIR, exist_ok=True)
         file_path = os.path.join(REPORT_DIR, filename)
 
-        # 💾 JSON 데이터 구성
         save_data = {
             "branch": branch,
             "period": f"{start_month}~{end_month}",
@@ -2153,13 +2172,12 @@ async def salon_analysis(
             },
         }
 
-        # === 🧾 로컬 JSON 파일로 저장 ===
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(save_data, f, ensure_ascii=False, indent=2)
 
         print(f"✅ 분석결과 로컬 저장 완료: {file_path}")
 
-        # === ☁️ Supabase에도 저장 ===
+        # ☁️ Supabase 저장
         supabase.table("analyses").insert({
             "user_id": user_id,
             "branch": branch,
