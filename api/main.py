@@ -2088,17 +2088,55 @@ async def salon_analysis(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"GPT 분석 실패: {e}")
 
-    # === 결과 저장 ===
+   # === 결과 저장 ===
     try:
+        # 🧠 저장용 제목 및 파일명
         title = f"{branch} ({start_month}~{end_month}) 실질 손익 리포트"
+        filename = f"{branch}_{start_month}_{end_month}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        
+        # 🗂️ 로컬 저장 경로
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        REPORT_DIR = os.path.join(BASE_DIR, "data", "reports")
+        os.makedirs(REPORT_DIR, exist_ok=True)
+        file_path = os.path.join(REPORT_DIR, filename)
+
+        # 💾 JSON 데이터 구성
+        save_data = {
+            "branch": branch,
+            "period": f"{start_month}~{end_month}",
+            "created_at": datetime.now().isoformat(),
+            "user_id": user_id,
+            "title": title,
+            "analysis": gpt_text,
+            "months": monthly_results,
+            "averages": {
+                "realized_sales": avg_realized,
+                "net_profit": avg_net,
+                "real_profit": avg_real,
+                "real_profit_rate": avg_real_rate,
+                "commission_rate": avg_commission,
+                "labor_rate": avg_labor,
+                "redemption_rate": avg_redemption,
+                "cash_flow": avg_cashflow,
+            },
+        }
+
+        # === 🧾 로컬 JSON 파일로 저장 ===
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(save_data, f, ensure_ascii=False, indent=2)
+
+        print(f"✅ 분석결과 로컬 저장 완료: {file_path}")
+
+        # === ☁️ Supabase에도 저장 ===
         supabase.table("analyses").insert({
             "user_id": user_id,
             "branch": branch,
             "title": title,
             "content": gpt_text,
         }).execute()
+
     except Exception as e:
-        print("⚠️ DB 저장 실패:", e)
+        print("⚠️ DB/파일 저장 실패:", e)
 
     # === 결과 반환 ===
     return {
