@@ -1942,21 +1942,24 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         print("⚠️ 통장 잔액 조회 실패:", e)
         raise HTTPException(status_code=500, detail=str(e))
     
-# === 💈 제이가빈 회계 자동분석 리포트 (V4.4 — 실현매출 기준 + 누적 정액권 보정판) ===
+# === 💈 제이가빈 회계 자동분석 리포트 (V4.6 — 실현매출 기준 + 누적 정액권 보정판) ===
 @app.post("/gpt/salon-analysis")
 async def salon_analysis(
     body: dict = Body(...),
     authorization: Optional[str] = Header(None),
 ):
     """
-    💈 제이가빈 회계 자동분석 리포트 (V4.4)
+    💈 제이가빈 회계 자동분석 리포트 (V4.6)
     - 입력 데이터: 매출, 정액권, 은행 입출금, 지출, 인건비, 사업자배당
-    - 계산: 실현매출, 수수료율, 인건비율, 회계순이익, 실질순이익
+    - 계산: 실현매출, 수수료율(결제수단별 가중평균), 인건비율, 회계순이익, 실질순이익
     - GPT 출력: 실질 손익 중심 자동 리포트
     - 개선점:
-        ✅ 수수료율 부호 반전 오류 수정
-        ✅ 정액권 잔액 누적 계산 반영 (음수 방지)
-        ✅ 실현매출 기준 인건비율 일관 적용
+        ✅ 계산 순서 정리(실현매출 → 비율 계산)
+        ✅ 결제수단별 실수료율 가중평균 1회만 계산
+        ✅ 수수료율 음수 방지(0~100% clamp)
+        ✅ 정액권 잔액 누적 계산 (음수 방지)
+        ✅ fetch_payroll에 user_id 필터 추가
+        ✅ Supabase insert 에러 처리 안전화
     """
     if not openai_client:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY 미설정")
@@ -1968,125 +1971,104 @@ async def salon_analysis(
     if not months:
         raise HTTPException(status_code=400, detail="months 데이터 누락")
 
+    # === Helpers ===
+    def clamp_percent(x: float) -> float:
+        """퍼센트 값 0~100 사이로 보정"""
+        if x is None or np.isnan(x):
+            return 0.0
+        return max(0.0, min(100.0, float(x)))
+
     # === 급여 (인건비) 조회 함수 ===
     def fetch_payroll(branch_name, month):
         try:
             res = (
                 supabase.table("designer_salaries")
                 .select("total_amount")
+                .eq("user_id", user_id)          # ← 추가
                 .eq("branch", branch_name)
                 .eq("month", month)
                 .execute()
             )
             if res.data and len(res.data) > 0:
-                return sum(float(r.get("total_amount", 0)) for r in res.data)
+                return sum(float(r.get("total_amount", 0) or 0) for r in res.data)
         except Exception as e:
             print(f"⚠️ 급여 조회 실패({branch_name}-{month}):", e)
         return 0.0
 
     # === 누적 잔액 초기화 ===
-    running_pass_balance = 0
+    running_pass_balance = 0.0
 
     # === 월별 계산 ===
     monthly_results = []
     for m in months:
         month = m.get("month", "YYYY-MM")
 
-        # 매출
-        card_sales = float(m.get("card_sales", 0))
-        pay_sales = float(m.get("pay_sales", 0))
-        cash_sales = float(m.get("cash_sales", 0))
-        account_sales = float(m.get("account_sales", 0))
-        total_sales = card_sales + pay_sales + cash_sales + account_sales
+        # 매출 원천
+        card_sales   = float(m.get("card_sales", 0) or 0)
+        pay_sales    = float(m.get("pay_sales", 0) or 0)
+        cash_sales   = float(m.get("cash_sales", 0) or 0)
+        account_sales= float(m.get("account_sales", 0) or 0)
+        total_sales  = card_sales + pay_sales + cash_sales + account_sales
 
         # 정액권
-        pass_paid = float(m.get("pass_paid", 0))
-        pass_used = float(m.get("pass_used", 0))
+        pass_paid = float(m.get("pass_paid", 0) or 0)
+        pass_used = float(m.get("pass_used", 0) or 0)
 
         # 은행 입출금
-        bank_inflow = float(m.get("bank_inflow", 0))  # 입금
-        bank_outflow = float(m.get("bank_outflow", 0))  # 출금
+        bank_inflow  = float(m.get("bank_inflow", 0) or 0)   # 입금(+)
+        bank_outflow = float(m.get("bank_outflow", 0) or 0)  # 출금(-)
 
         # 지출
-        fixed_exp = float(m.get("fixed_exp", 0))
-        var_exp = float(m.get("var_exp", 0))
-        owner_dividend = float(m.get("owner_dividend", 0))
+        fixed_exp       = float(m.get("fixed_exp", 0) or 0)
+        var_exp         = float(m.get("var_exp", 0) or 0)
+        owner_dividend  = float(m.get("owner_dividend", 0) or 0)
 
         # 인건비
-        labor_cost = float(m.get("labor_cost", 0))
+        labor_cost = float(m.get("labor_cost", 0) or 0)
         if labor_cost == 0:
             labor_cost = fetch_payroll(branch, month)
 
-        # ✅ 결제수단별 실수료율 계산 (음수 불가)
-        card_inflow = float(m.get("card_inflow", 0))
-        pay_inflow = float(m.get("pay_inflow", 0))
-
-        card_commission_rate = ((card_sales - card_inflow) / card_sales * 100) if card_sales > 0 else 0
-        pay_commission_rate = ((pay_sales - pay_inflow) / pay_sales * 100) if pay_sales > 0 else 0
-
-        # ✅ 전체 평균 수수료율 (가중평균)
-        commission_rate = (
-            ((card_sales * card_commission_rate) + (pay_sales * pay_commission_rate)) /
-            (card_sales + pay_sales)
-        ) if (card_sales + pay_sales) > 0 else 0
-
-        # === 주요 비율 및 계산식 ===
-        redemption_rate = (pass_used / pass_paid * 100) if pass_paid else 0
-
-        # ✅ 결제수단별 실수료율 계산 (정확한 실무 방식)
-        card_inflow = float(m.get("card_inflow", 0))
-        pay_inflow = float(m.get("pay_inflow", 0))
-
-        card_commission_rate = ((card_sales - card_inflow) / card_sales * 100) if card_sales > 0 else 0
-        pay_commission_rate = ((pay_sales - pay_inflow) / pay_sales * 100) if pay_sales > 0 else 0
-
-        # ✅ 전체 평균 수수료율 (가중평균)
-        commission_rate = (
-            ((card_sales * card_commission_rate) + (pay_sales * pay_commission_rate)) /
-            (card_sales + pay_sales)
-        ) if (card_sales + pay_sales) > 0 else 0
-
-        # ✅ 인건비율
-        labor_rate = (labor_cost / realized_sales * 100) if realized_sales else 0
-
-        # === 정액권 잔액 (누적 반영) ===
-        running_pass_balance += pass_paid - pass_used
-        pass_balance = max(running_pass_balance, 0)  # 음수 방지
-
-        # === 주요 비율 및 계산식 ===
-        redemption_rate = (pass_used / pass_paid * 100) if pass_paid else 0
-                # === 실현매출 계산 (중복 차감 방지 로직 포함) ===
+        # === 실현매출 계산 (중복 차감 방지 로직 포함) ===
+        # 총매출에서 선결제(pass_paid)는 제외, 사용(pass_used)은 포함
         if total_sales < (pass_paid + pass_used):
             realized_sales = total_sales + pass_used
         else:
             realized_sales = (total_sales - pass_paid) + pass_used
 
-        # === 정액권 잔액 (누적 반영) ===
+        # === 정액권 잔액 (누적 반영, 음수 방지) ===
         running_pass_balance += pass_paid - pass_used
-        pass_balance = max(running_pass_balance, 0)  # 음수 방지
+        pass_balance = max(running_pass_balance, 0.0)
 
-        # === 결제수단별 실수료율 계산 (정확한 실무 방식) ===
-        card_inflow = float(m.get("card_inflow", 0))
-        pay_inflow = float(m.get("pay_inflow", 0))
+        # === 결제수단별 실수료율 계산(정확한 실무 방식) ===
+        card_inflow = float(m.get("card_inflow", 0) or 0)
+        pay_inflow  = float(m.get("pay_inflow", 0) or 0)
 
-        card_commission_rate = ((card_sales - card_inflow) / card_sales * 100) if card_sales > 0 else 0
-        pay_commission_rate = ((pay_sales - pay_inflow) / pay_sales * 100) if pay_sales > 0 else 0
+        card_commission_rate = 0.0
+        if card_sales > 0:
+            card_commission_rate = clamp_percent(((card_sales - card_inflow) / card_sales) * 100.0)
 
-        # ✅ 전체 평균 수수료율 (가중평균)
-        commission_rate = (
-            ((card_sales * card_commission_rate) + (pay_sales * pay_commission_rate)) /
-            (card_sales + pay_sales)
-        ) if (card_sales + pay_sales) > 0 else 0
+        pay_commission_rate = 0.0
+        if pay_sales > 0:
+            pay_commission_rate = clamp_percent(((pay_sales - pay_inflow) / pay_sales) * 100.0)
+
+        # 가중 평균 수수료율 (카드+페이 기준)
+        denominator = (card_sales + pay_sales)
+        if denominator > 0:
+            commission_rate = clamp_percent(
+                ((card_sales * card_commission_rate) + (pay_sales * pay_commission_rate)) / denominator
+            )
+        else:
+            commission_rate = 0.0
 
         # === 주요 비율 ===
-        redemption_rate = (pass_used / pass_paid * 100) if pass_paid else 0
-        labor_rate = (labor_cost / realized_sales * 100) if realized_sales else 0
+        redemption_rate = clamp_percent((pass_used / pass_paid) * 100.0) if pass_paid > 0 else 0.0
+        labor_rate      = (labor_cost / realized_sales * 100.0) if realized_sales > 0 else 0.0
 
-        # === 순이익 및 실질 순이익 ===
-        net_profit = realized_sales - (fixed_exp + var_exp + labor_cost)
-        real_profit = net_profit + owner_dividend
-        real_profit_rate = (real_profit / realized_sales * 100) if realized_sales else 0
-        cash_flow = bank_inflow - bank_outflow
+        # === 손익/현금흐름 ===
+        net_profit      = realized_sales - (fixed_exp + var_exp + labor_cost)
+        real_profit     = net_profit + owner_dividend
+        real_profit_rate= (real_profit / realized_sales * 100.0) if realized_sales > 0 else 0.0
+        cash_flow       = bank_inflow - bank_outflow
 
         # === 정액권 차감 초과 감지 ===
         if pass_used > pass_paid:
@@ -2120,25 +2102,25 @@ async def salon_analysis(
         })
 
     # === 평균 계산 ===
-    avg_realized = np.mean([m["realized_sales"] for m in monthly_results])
-    avg_net = np.mean([m["net_profit"] for m in monthly_results])
-    avg_real = np.mean([m["real_profit"] for m in monthly_results])
-    avg_real_rate = np.mean([m["real_profit_rate"] for m in monthly_results])
-    avg_commission = np.mean([m["commission_rate"] for m in monthly_results])
-    avg_labor = np.mean([m["labor_rate"] for m in monthly_results])
-    avg_redemption = np.mean([m["redemption_rate"] for m in monthly_results])
-    avg_cashflow = np.mean([m["cash_flow"] for m in monthly_results])
+    avg_realized   = np.mean([m["realized_sales"]   for m in monthly_results]) if monthly_results else 0.0
+    avg_net        = np.mean([m["net_profit"]       for m in monthly_results]) if monthly_results else 0.0
+    avg_real       = np.mean([m["real_profit"]      for m in monthly_results]) if monthly_results else 0.0
+    avg_real_rate  = np.mean([m["real_profit_rate"] for m in monthly_results]) if monthly_results else 0.0
+    avg_commission = np.mean([m["commission_rate"]  for m in monthly_results]) if monthly_results else 0.0
+    avg_labor      = np.mean([m["labor_rate"]       for m in monthly_results]) if monthly_results else 0.0
+    avg_redemption = np.mean([m["redemption_rate"]  for m in monthly_results]) if monthly_results else 0.0
+    avg_cashflow   = np.mean([m["cash_flow"]        for m in monthly_results]) if monthly_results else 0.0
 
-    # === 표 구성 ===
+    # === 표 구성 (프롬프트는 변경 없이 유지) ===
     table_text = "\n".join([
         f"| {m['month']} | ₩{m['total_sales']:,.0f} | ₩{m['realized_sales']:,.0f} | ₩{m['net_profit']:,.0f} | ₩{m['owner_dividend']:,.0f} | ₩{m['real_profit']:,.0f} | {m['real_profit_rate']:.1f}% | {m['commission_rate']:.1f}% | {m['labor_rate']:.1f}% | {m['redemption_rate']:.1f}% | ₩{m['cash_flow']:,.0f} |"
         for m in monthly_results
     ])
 
     start_month = months[0].get("month")
-    end_month = months[-1].get("month")
+    end_month   = months[-1].get("month")
 
-    # === GPT 프롬프트 ===
+    # === GPT 프롬프트 (변경 없음) ===
     prompt = f"""
 💈 제이가빈 회계 자동분석 리포트 (V4.4 — 실현매출 기준 + 누적 정액권 보정판)
 지점명: {branch}
@@ -2180,16 +2162,14 @@ async def salon_analysis(
             temperature=0.25,
             max_tokens=2800,
             messages=[
-                {
-                    "role": "system",
-                    "content": "당신은 미용실 전문 회계 분석가입니다. 수치에 근거한 재무 리포트를 작성하십시오. 추측 금지."
-                },
+                {"role": "system", "content": "당신은 미용실 전문 회계 분석가입니다. 수치에 근거한 재무 리포트를 작성하십시오. 추측 금지."},
                 {"role": "user", "content": prompt},
             ],
             timeout=120,
         )
         gpt_text = resp.choices[0].message.content
     except Exception as e:
+        print("⚠️ GPT 분석 실패:", e)
         raise HTTPException(status_code=500, detail=f"GPT 분석 실패: {e}")
 
     # === 💾 결과 저장 (로컬 JSON) ===
@@ -2226,7 +2206,6 @@ async def salon_analysis(
             json.dump(save_data, f, ensure_ascii=False, indent=2)
 
         print(f"✅ 분석결과 로컬 저장 완료: {file_path}")
-
     except Exception as e:
         print(f"⚠️ 로컬 파일 저장 실패: {e}")
 
@@ -2238,7 +2217,7 @@ async def salon_analysis(
                 "user_id": user_id,
                 "branch": branch,
                 "title": title,
-                "content": gpt_text,
+                "content": gpt_text,  # ← 스키마에 content 컬럼 있어야 함
                 "created_at": datetime.now().isoformat()
             })
             .execute()
@@ -2246,14 +2225,18 @@ async def salon_analysis(
 
         print("📄 Supabase 응답:", insert_res)
 
-        if not insert_res.data:
+        res_data = getattr(insert_res, "data", None)
+        res_err  = getattr(insert_res, "error", None)
+        if not res_data:
             raise HTTPException(
                 status_code=500,
-                detail=f"Supabase 저장 실패: {insert_res.error or 'data 비어있음'}"
+                detail=f"Supabase 저장 실패: {res_err or 'data 비어있음'}"
             )
 
-        print(f"✅ Supabase 저장 완료: {insert_res.data}")
-
+        print(f"✅ Supabase 저장 완료: {res_data}")
+    except HTTPException:
+        # 위에서 이미 상세 메시지로 래이즈했으므로 그대로 전파
+        raise
     except Exception as e:
         print(f"❌ Supabase 저장 실패: {e}")
         raise HTTPException(status_code=500, detail=f"Supabase 저장 실패: {e}")
