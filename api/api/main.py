@@ -2047,16 +2047,32 @@ async def salon_analysis(
         # 리포트 내부 카테고리 기준 매출 (실제 매출 데이터)
         category_card_sales = float(m.get("card_sales", 0) or 0)
         category_pay_sales  = float(m.get("pay_sales", 0) or 0)
+        
+        # ✅ 올바른 수수료율 계산 (매출 - 입금액 기준)
+        card_sales = float(m.get("card_sales", 0) or 0)
+        pay_sales = float(m.get("pay_sales", 0) or 0)
+        card_inflow = float(m.get("card_inflow", 0) or 0)
+        pay_inflow = float(m.get("pay_inflow", 0) or 0)
 
-        # 각각의 수수료율 계산
         card_commission_rate = (
-            ((input_card_sales - category_card_sales) / input_card_sales) * 100
-            if input_card_sales > 0 else 0
+            ((card_sales - card_inflow) / card_sales) * 100
+            if card_sales > 0 else 0
         )
         pay_commission_rate = (
-            ((input_pay_sales - category_pay_sales) / input_pay_sales) * 100
-            if input_pay_sales > 0 else 0
+            ((pay_sales - pay_inflow) / pay_sales) * 100
+            if pay_sales > 0 else 0
         )
+
+        total_sales_for_commission = card_sales + pay_sales
+        if total_sales_for_commission > 0:
+            commission_rate = (
+                (card_sales * card_commission_rate + pay_sales * pay_commission_rate)
+                / total_sales_for_commission
+            )
+        else:
+            commission_rate = 0.0
+
+        commission_rate = clamp_percent(commission_rate)
 
         # 가중평균 수수료율
         total_input = input_card_sales + input_pay_sales
