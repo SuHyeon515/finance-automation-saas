@@ -2028,7 +2028,7 @@ async def salon_analysis(
         if labor_cost == 0:
             labor_cost = fetch_payroll(branch, month)
 
-        # === 실현매출 계산 (중복 차감 방지 로직 포함) ===
+        # === ✅ 실현매출 계산 (중복 차감 방지 로직 포함) ===
         # 총매출에서 선결제(pass_paid)는 제외, 사용(pass_used)은 포함
         if total_sales < (pass_paid + pass_used):
             realized_sales = total_sales + pass_used
@@ -2039,26 +2039,22 @@ async def salon_analysis(
         running_pass_balance += pass_paid - pass_used
         pass_balance = max(running_pass_balance, 0.0)
 
-        # === 결제수단별 실수료율 계산(정확한 실무 방식) ===
+        # === 결제수단별 실수료율 계산 (정확한 실무 방식) ===
         card_inflow = float(m.get("card_inflow", 0) or 0)
         pay_inflow  = float(m.get("pay_inflow", 0) or 0)
 
-        card_commission_rate = 0.0
-        if card_sales > 0:
-            card_commission_rate = clamp_percent(((card_sales - card_inflow) / card_sales) * 100.0)
+        # 개별 수수료율 계산
+        card_commission_rate = ((card_sales - card_inflow) / card_sales * 100) if card_sales > 0 else 0
+        pay_commission_rate  = ((pay_sales - pay_inflow) / pay_sales * 100) if pay_sales > 0 else 0
 
-        pay_commission_rate = 0.0
-        if pay_sales > 0:
-            pay_commission_rate = clamp_percent(((pay_sales - pay_inflow) / pay_sales) * 100.0)
+        # 가중 평균 수수료율 (카드 + 페이)
+        commission_rate = (
+            (card_sales * card_commission_rate + pay_sales * pay_commission_rate)
+            / (card_sales + pay_sales)
+        ) if (card_sales + pay_sales) > 0 else 0
 
-        # 가중 평균 수수료율 (카드+페이 기준)
-        denominator = (card_sales + pay_sales)
-        if denominator > 0:
-            commission_rate = clamp_percent(
-                ((card_sales * card_commission_rate) + (pay_sales * pay_commission_rate)) / denominator
-            )
-        else:
-            commission_rate = 0.0
+        # 수수료율 범위 보정
+        commission_rate = clamp_percent(commission_rate)
 
         # === 주요 비율 ===
         redemption_rate = clamp_percent((pass_used / pass_paid) * 100.0) if pass_paid > 0 else 0.0
