@@ -1956,7 +1956,7 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         print("⚠️ 통장 잔액 조회 실패:", e)
         raise HTTPException(status_code=500, detail=str(e))
     
-# === 💈 제이가빈 회계 자동분석 리포트 (V4.9 — 실현매출 기준 + 수수료율 정상화판) ===
+# === 💈 제이가빈 회계 자동분석 리포트 (V5.0 — 실현매출 기준 + 수수료율 정상화판) ===
 @app.post("/gpt/salon-analysis")
 async def salon_analysis(
     body: dict = Body(...),
@@ -2044,8 +2044,13 @@ async def salon_analysis(
         # === ✅ 수수료율 계산 (입력 vs 카테고리 기준) ===
         input_card_sales = float(m.get("input_card_sales", card_sales) or 0)
         input_pay_sales = float(m.get("input_pay_sales", pay_sales) or 0)
-        category_card_sales = float(m.get("category_card_sales", 0) or 0)
-        category_pay_sales = float(m.get("category_pay_sales", 0) or 0)
+        # category_* 값이 없으면 card_sales/pay_sales 로 fallback
+        category_card_sales = float(
+            m.get("category_card_sales", m.get("card_sales", 0)) or 0
+        )
+        category_pay_sales = float(
+            m.get("category_pay_sales", m.get("pay_sales", 0)) or 0
+        )
 
         card_commission_rate = (
             ((input_card_sales - category_card_sales) / input_card_sales) * 100
@@ -2146,7 +2151,7 @@ async def salon_analysis(
 
     # === GPT 프롬프트 (변경 없음) ===
     prompt = f"""
-💈 제이가빈 회계 자동분석 리포트 (V4.4 — 실현매출 기준 + 누적 정액권 보정판)
+💈 제이가빈 회계 자동분석 리포트 (V5.0 — 입력 vs 카테고리 수수료율 적용판)
 지점명: {branch}
 분석기간: {start_month} ~ {end_month}
 
