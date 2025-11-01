@@ -1942,24 +1942,22 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         print("⚠️ 통장 잔액 조회 실패:", e)
         raise HTTPException(status_code=500, detail=str(e))
     
-# === 💈 제이가빈 회계 자동분석 리포트 (V4.6 — 실현매출 기준 + 누적 정액권 보정판) ===
+# === 💈 제이가빈 회계 자동분석 리포트 (V4.9 — 실현매출 기준 + 수수료율 정상화판) ===
 @app.post("/gpt/salon-analysis")
 async def salon_analysis(
     body: dict = Body(...),
     authorization: Optional[str] = Header(None),
 ):
     """
-    💈 제이가빈 회계 자동분석 리포트 (V4.6)
+    💈 제이가빈 회계 자동분석 리포트 (V4.9)
     - 입력 데이터: 매출, 정액권, 은행 입출금, 지출, 인건비, 사업자배당
-    - 계산: 실현매출, 수수료율(결제수단별 가중평균), 인건비율, 회계순이익, 실질순이익
+    - 계산: 실현매출, 수수료율(매출-입금 기반), 인건비율, 회계순이익, 실질순이익
     - GPT 출력: 실질 손익 중심 자동 리포트
     - 개선점:
-        ✅ 계산 순서 정리(실현매출 → 비율 계산)
-        ✅ 결제수단별 실수료율 가중평균 1회만 계산
-        ✅ 수수료율 음수 방지(0~100% clamp)
-        ✅ 정액권 잔액 누적 계산 (음수 방지)
-        ✅ fetch_payroll에 user_id 필터 추가
-        ✅ Supabase insert 에러 처리 안전화
+        ✅ 결제수단별 실수료율 정상 계산 (매출 - 입금액 기준)
+        ✅ 중복 수수료율 블록 삭제
+        ✅ 음수/NaN 수수료율 방지 (0~100% clamp)
+        ✅ print 로그로 월별 수수료율 검증
     """
     if not openai_client:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY 미설정")
@@ -1978,176 +1976,166 @@ async def salon_analysis(
             return 0.0
         return max(0.0, min(100.0, float(x)))
 
-    # === 급여 (인건비) 조회 함수 ===
+    # === 급여 (인건비) 조회 ===
     def fetch_payroll(branch_name, month):
         try:
             res = (
                 supabase.table("designer_salaries")
                 .select("total_amount")
-                .eq("user_id", user_id)          # ← 추가
+                .eq("user_id", user_id)
                 .eq("branch", branch_name)
                 .eq("month", month)
                 .execute()
             )
-            if res.data and len(res.data) > 0:
+            if res.data:
                 return sum(float(r.get("total_amount", 0) or 0) for r in res.data)
         except Exception as e:
             print(f"⚠️ 급여 조회 실패({branch_name}-{month}):", e)
         return 0.0
 
-    # === 누적 잔액 초기화 ===
+    # === 정액권 누적 잔액 초기화 ===
     running_pass_balance = 0.0
+    monthly_results = []
 
     # === 월별 계산 ===
-    monthly_results = []
     for m in months:
         month = m.get("month", "YYYY-MM")
 
-        # 매출 원천
-        card_sales   = float(m.get("card_sales", 0) or 0)
-        pay_sales    = float(m.get("pay_sales", 0) or 0)
-        cash_sales   = float(m.get("cash_sales", 0) or 0)
-        account_sales= float(m.get("account_sales", 0) or 0)
-        total_sales  = card_sales + pay_sales + cash_sales + account_sales
+        # === 매출 ===
+        card_sales = float(m.get("card_sales", 0) or 0)
+        pay_sales = float(m.get("pay_sales", 0) or 0)
+        cash_sales = float(m.get("cash_sales", 0) or 0)
+        account_sales = float(m.get("account_sales", 0) or 0)
+        total_sales = card_sales + pay_sales + cash_sales + account_sales
 
-        # 정액권
+        # === 정액권 ===
         pass_paid = float(m.get("pass_paid", 0) or 0)
         pass_used = float(m.get("pass_used", 0) or 0)
 
-        # 은행 입출금
-        bank_inflow  = float(m.get("bank_inflow", 0) or 0)   # 입금(+)
-        bank_outflow = float(m.get("bank_outflow", 0) or 0)  # 출금(-)
+        # === 은행 입출금 ===
+        bank_inflow = float(m.get("bank_inflow", 0) or 0)
+        bank_outflow = float(m.get("bank_outflow", 0) or 0)
 
-        # 지출
-        fixed_exp       = float(m.get("fixed_exp", 0) or 0)
-        var_exp         = float(m.get("var_exp", 0) or 0)
-        owner_dividend  = float(m.get("owner_dividend", 0) or 0)
-
-        # 인건비
+        # === 지출 및 인건비 ===
+        fixed_exp = float(m.get("fixed_exp", 0) or 0)
+        var_exp = float(m.get("var_exp", 0) or 0)
+        owner_dividend = float(m.get("owner_dividend", 0) or 0)
         labor_cost = float(m.get("labor_cost", 0) or 0)
         if labor_cost == 0:
             labor_cost = fetch_payroll(branch, month)
 
-        # === ✅ 실현매출 계산 (중복 차감 방지 로직 포함) ===
-        # 총매출에서 선결제(pass_paid)는 제외, 사용(pass_used)은 포함
+        # === 실현매출 ===
         if total_sales < (pass_paid + pass_used):
             realized_sales = total_sales + pass_used
         else:
             realized_sales = (total_sales - pass_paid) + pass_used
 
-        # === 정액권 잔액 (누적 반영, 음수 방지) ===
+        # === 정액권 잔액 (누적 관리) ===
         running_pass_balance += pass_paid - pass_used
         pass_balance = max(running_pass_balance, 0.0)
 
-        # === 결제수단별 수수료율 계산 (카테고리 대비 실매출 비교 방식) ===
-        # 사용자가 입력한 원본 매장 매출 데이터 (입금 기준)
-        input_card_sales = float(m.get("input_card_sales", 0) or 0)
-        input_pay_sales  = float(m.get("input_pay_sales", 0) or 0)
-
-        # 리포트 내부 카테고리 기준 매출 (실제 매출 데이터)
-        category_card_sales = float(m.get("card_sales", 0) or 0)
-        category_pay_sales  = float(m.get("pay_sales", 0) or 0)
-        
-        # ✅ 올바른 수수료율 계산 (매출 - 입금액 기준)
-        card_sales = float(m.get("card_sales", 0) or 0)
-        pay_sales = float(m.get("pay_sales", 0) or 0)
+        # === ✅ 수수료율 계산 (매출 - 입금액 기준) ===
         card_inflow = float(m.get("card_inflow", 0) or 0)
         pay_inflow = float(m.get("pay_inflow", 0) or 0)
 
         card_commission_rate = (
-            ((card_sales - card_inflow) / card_sales) * 100
-            if card_sales > 0 else 0
+            ((card_sales - card_inflow) / card_sales) * 100 if card_sales > 0 else 0
         )
         pay_commission_rate = (
-            ((pay_sales - pay_inflow) / pay_sales) * 100
-            if pay_sales > 0 else 0
+            ((pay_sales - pay_inflow) / pay_sales) * 100 if pay_sales > 0 else 0
         )
 
-        total_sales_for_commission = card_sales + pay_sales
-        if total_sales_for_commission > 0:
+        total_for_commission = card_sales + pay_sales
+        if total_for_commission > 0:
             commission_rate = (
                 (card_sales * card_commission_rate + pay_sales * pay_commission_rate)
-                / total_sales_for_commission
+                / total_for_commission
             )
         else:
             commission_rate = 0.0
 
         commission_rate = clamp_percent(commission_rate)
 
-        # 가중평균 수수료율
-        total_input = input_card_sales + input_pay_sales
-        if total_input > 0:
-            commission_rate = (
-                (input_card_sales * card_commission_rate + input_pay_sales * pay_commission_rate)
-                / total_input
-            )
-        else:
-            commission_rate = 0
-
-        commission_rate = clamp_percent(commission_rate)
-
-        # 수수료율 범위 보정
-        commission_rate = clamp_percent(commission_rate)
+        print(
+            f"[{month}] 카드매출={card_sales:,}, 카드입금={card_inflow:,}, "
+            f"페이매출={pay_sales:,}, 페이입금={pay_inflow:,} → 수수료율={commission_rate:.2f}%"
+        )
 
         # === 주요 비율 ===
-        redemption_rate = clamp_percent((pass_used / pass_paid) * 100.0) if pass_paid > 0 else 0.0
-        labor_rate      = (labor_cost / realized_sales * 100.0) if realized_sales > 0 else 0.0
+        redemption_rate = (
+            clamp_percent((pass_used / pass_paid) * 100.0) if pass_paid > 0 else 0.0
+        )
+        labor_rate = (
+            (labor_cost / realized_sales * 100.0) if realized_sales > 0 else 0.0
+        )
 
-        # === 손익/현금흐름 ===
-        net_profit      = realized_sales - (fixed_exp + var_exp + labor_cost)
-        real_profit     = net_profit + owner_dividend
-        real_profit_rate= (real_profit / realized_sales * 100.0) if realized_sales > 0 else 0.0
-        cash_flow       = bank_inflow - bank_outflow
+        # === 손익 계산 ===
+        net_profit = realized_sales - (fixed_exp + var_exp + labor_cost)
+        real_profit = net_profit + owner_dividend
+        real_profit_rate = (
+            (real_profit / realized_sales * 100.0) if realized_sales > 0 else 0.0
+        )
+        cash_flow = bank_inflow - bank_outflow
 
-        # === 정액권 차감 초과 감지 ===
+        # === 정액권 초과 차감 감지 ===
         if pass_used > pass_paid:
-            print(f"⚠️ [{branch}] {month}: 정액권 차감액이 결제액을 초과했습니다 (결제:{pass_paid}, 차감:{pass_used})")
+            print(
+                f"⚠️ [{branch}] {month}: 정액권 차감액이 결제액을 초과 (결제:{pass_paid}, 차감:{pass_used})"
+            )
 
-        # === 월별 데이터 추가 ===
-        monthly_results.append({
-            "month": month,
-            "total_sales": total_sales,
-            "card_sales": card_sales,
-            "pay_sales": pay_sales,
-            "cash_sales": cash_sales,
-            "account_sales": account_sales,
-            "pass_paid": pass_paid,
-            "pass_used": pass_used,
-            "fixed_exp": fixed_exp,
-            "var_exp": var_exp,
-            "labor_cost": labor_cost,
-            "owner_dividend": owner_dividend,
-            "bank_inflow": bank_inflow,
-            "bank_outflow": bank_outflow,
-            "realized_sales": realized_sales,
-            "pass_balance": pass_balance,
-            "redemption_rate": redemption_rate,
-            "commission_rate": commission_rate,
-            "labor_rate": labor_rate,
-            "net_profit": net_profit,
-            "real_profit": real_profit,
-            "real_profit_rate": real_profit_rate,
-            "cash_flow": cash_flow,
-        })
+        # === 월별 결과 추가 ===
+        monthly_results.append(
+            {
+                "month": month,
+                "total_sales": total_sales,
+                "card_sales": card_sales,
+                "pay_sales": pay_sales,
+                "cash_sales": cash_sales,
+                "account_sales": account_sales,
+                "pass_paid": pass_paid,
+                "pass_used": pass_used,
+                "fixed_exp": fixed_exp,
+                "var_exp": var_exp,
+                "labor_cost": labor_cost,
+                "owner_dividend": owner_dividend,
+                "bank_inflow": bank_inflow,
+                "bank_outflow": bank_outflow,
+                "realized_sales": realized_sales,
+                "pass_balance": pass_balance,
+                "redemption_rate": redemption_rate,
+                "commission_rate": commission_rate,
+                "labor_rate": labor_rate,
+                "net_profit": net_profit,
+                "real_profit": real_profit,
+                "real_profit_rate": real_profit_rate,
+                "cash_flow": cash_flow,
+            }
+        )
 
     # === 평균 계산 ===
-    avg_realized   = np.mean([m["realized_sales"]   for m in monthly_results]) if monthly_results else 0.0
-    avg_net        = np.mean([m["net_profit"]       for m in monthly_results]) if monthly_results else 0.0
-    avg_real       = np.mean([m["real_profit"]      for m in monthly_results]) if monthly_results else 0.0
-    avg_real_rate  = np.mean([m["real_profit_rate"] for m in monthly_results]) if monthly_results else 0.0
-    avg_commission = np.mean([m["commission_rate"]  for m in monthly_results]) if monthly_results else 0.0
-    avg_labor      = np.mean([m["labor_rate"]       for m in monthly_results]) if monthly_results else 0.0
-    avg_redemption = np.mean([m["redemption_rate"]  for m in monthly_results]) if monthly_results else 0.0
-    avg_cashflow   = np.mean([m["cash_flow"]        for m in monthly_results]) if monthly_results else 0.0
+    avg = lambda k: np.mean([m[k] for m in monthly_results]) if monthly_results else 0.0
 
-    # === 표 구성 (프롬프트는 변경 없이 유지) ===
-    table_text = "\n".join([
-        f"| {m['month']} | ₩{m['total_sales']:,.0f} | ₩{m['realized_sales']:,.0f} | ₩{m['net_profit']:,.0f} | ₩{m['owner_dividend']:,.0f} | ₩{m['real_profit']:,.0f} | {m['real_profit_rate']:.1f}% | {m['commission_rate']:.1f}% | {m['labor_rate']:.1f}% | {m['redemption_rate']:.1f}% | ₩{m['cash_flow']:,.0f} |"
-        for m in monthly_results
-    ])
+    averages = {
+        "realized_sales": avg("realized_sales"),
+        "net_profit": avg("net_profit"),
+        "real_profit": avg("real_profit"),
+        "real_profit_rate": avg("real_profit_rate"),
+        "commission_rate": avg("commission_rate"),
+        "labor_rate": avg("labor_rate"),
+        "redemption_rate": avg("redemption_rate"),
+        "cash_flow": avg("cash_flow"),
+    }
+
+    # === 표 구성 ===
+    table_text = "\n".join(
+        [
+            f"| {m['month']} | ₩{m['total_sales']:,.0f} | ₩{m['realized_sales']:,.0f} | ₩{m['net_profit']:,.0f} | ₩{m['owner_dividend']:,.0f} | ₩{m['real_profit']:,.0f} | {m['real_profit_rate']:.1f}% | {m['commission_rate']:.1f}% | {m['labor_rate']:.1f}% | {m['redemption_rate']:.1f}% | ₩{m['cash_flow']:,.0f} |"
+            for m in monthly_results
+        ]
+    )
 
     start_month = months[0].get("month")
-    end_month   = months[-1].get("month")
+    end_month = months[-1].get("month")
 
     # === GPT 프롬프트 (변경 없음) ===
     prompt = f"""
