@@ -19,6 +19,7 @@ from pydantic import BaseModel, field_validator
 import re
 import jwt
 import requests
+import json
 
 load_dotenv()
 
@@ -41,7 +42,6 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 app = FastAPI()
 
-# ✅ CORS 완전 대응 버전
 allowed_origins = [
     "https://finance-automation-saas-um91.vercel.app",
     "https://finance-automation-saas.vercel.app",
@@ -49,21 +49,35 @@ allowed_origins = [
     "https://finance-automation-saas.onrender.com"
 ]
 
-# 환경변수 ALLOWED_ORIGINS도 병합 (콤마 구분 지원)
-env_origins = os.getenv("ALLOWED_ORIGINS", "")
+env_origins = os.getenv("ALLOWED_ORIGINS")
 if env_origins:
     allowed_origins.extend([o.strip() for o in env_origins.split(",") if o.strip()])
+else:
+    print("⚠️ ALLOWED_ORIGINS 환경변수 없음 → 기본 허용 목록 사용")
 
-# ✅ 중복 제거
-allowed_origins = list(set(allowed_origins))
+allowed_origins = list(set(allowed_origins))  # 중복 제거
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,       # ← 리스트로 정확히 전달
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.options("/{path:path}")
+async def options_handler(path: str):
+    return Response(status_code=200)
+
+@app.middleware("http")
+async def log_origin(request, call_next):
+    origin = request.headers.get("origin")
+    print(f"🌐 요청 Origin: {origin}")
+    response = await call_next(request)
+    print(f"✅ 응답 Access-Control-Allow-Origin: {response.headers.get('access-control-allow-origin')}")
+    return response
+
+
 # === Helper ===
 def build_download_headers(filename: str) -> dict:
     ascii_fallback = "download.xlsx"
@@ -2136,6 +2150,15 @@ async def salon_analysis(
 
     start_month = months[0].get("month")
     end_month = months[-1].get("month")
+
+    avg_realized = averages["realized_sales"]
+    avg_net = averages["net_profit"]
+    avg_real = averages["real_profit"]
+    avg_real_rate = averages["real_profit_rate"]
+    avg_commission = averages["commission_rate"]
+    avg_labor = averages["labor_rate"]
+    avg_redemption = averages["redemption_rate"]
+    avg_cashflow = averages["cash_flow"]
 
     # === GPT 프롬프트 (변경 없음) ===
     prompt = f"""
