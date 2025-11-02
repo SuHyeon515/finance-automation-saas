@@ -2045,7 +2045,7 @@ async def salon_analysis(
 
     # 3️⃣ 지출 및 기타 데이터 (transactions summary)
     expense_data = (
-        supabase.table("transactions_summary")
+        supabase.table("transactions")
         .select("month, fixed_expense, variable_expense, owner_dividend")
         .eq("user_id", user_id)
         .eq("branch", branch)
