@@ -2019,9 +2019,10 @@ async def salon_analysis(
 
     # === 실제 DB에서 데이터 불러오기 ===
     # 1️⃣ 입력 매출 (사용자 직접 입력값)
-    input_sales = (
-        supabase.table("salon_input_sales")
-        .select("month, card_sales, pay_sales")
+    # ✅ 병합: 이제 하나의 테이블만 사용
+    months = (
+        supabase.table("salon_monthly_data")
+        .select("month, card_sales, pay_sales, cash_sales, account_sales, pass_paid, pass_used, fixed_expense, variable_expense, owner_dividend")
         .eq("user_id", user_id)
         .eq("branch", branch)
         .gte("month", start_month)
@@ -2055,7 +2056,7 @@ async def salon_analysis(
     )
 
     # === 데이터 병합 (월 기준 join)
-    df_input = pd.DataFrame(input_sales)
+    df_input = pd.DataFrame(months) 
     df_cat = pd.DataFrame(category_sales)
     df_exp = pd.DataFrame(expense_data)
 
