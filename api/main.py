@@ -1912,7 +1912,43 @@ async def get_monthly_data(
         print("❌ salon_monthly_data 조회 오류:", e)
         raise HTTPException(status_code=500, detail=f"조회 실패: {e}")
     
+@app.post("/salon/input-sales")
+async def get_input_sales(
+    body: dict = Body(...),
+    authorization: Optional[str] = Header(None),
+):
+    """
+    ✅ 지점(branch)과 기간(start_month~end_month)을 기준으로
+    사용자가 직접 입력한 '실제 매출'(카드/페이)을 반환합니다.
+    (테이블: salon_input_sales)
+    """
+    user_id = await get_user_id(authorization)
+    branch = body.get("branch")
+    start_month = body.get("start_month")
+    end_month = body.get("end_month")
 
+    if not all([branch, start_month, end_month]):
+        raise HTTPException(status_code=400, detail="branch, start_month, end_month 필수")
+
+    try:
+        res = (
+            supabase.table("salon_input_sales")
+            .select("month, card_sales, pay_sales")
+            .eq("user_id", user_id)
+            .eq("branch", branch)
+            .gte("month", start_month)
+            .lte("month", end_month)
+            .order("month", desc=False)
+            .execute()
+        )
+        data = res.data or []
+
+        print(f"✅ [salon_input_sales] {branch} {start_month}~{end_month} ({len(data)}건)")
+        return data
+
+    except Exception as e:
+        print(f"❌ salon_input_sales 조회 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"조회 실패: {e}")
 
 # === 최신 통장 잔액 조회 ===
 @app.post("/transactions/latest-balance")
@@ -2024,8 +2060,8 @@ async def salon_analysis(
         bank_outflow = float(m.get("bank_outflow", 0) or 0)
 
         # === 지출 및 인건비 ===
-        fixed_exp = float(m.get("fixed_exp", 0) or 0)
-        var_exp = float(m.get("var_exp", 0) or 0)
+        fixed_exp = float(m.get("fixed_expense", 0) or 0)
+        var_exp = float(m.get("variable_expense", 0) or 0)
         owner_dividend = float(m.get("owner_dividend", 0) or 0)
         labor_cost = float(m.get("labor_cost", 0) or 0)
         if labor_cost == 0:

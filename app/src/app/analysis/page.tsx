@@ -72,7 +72,6 @@ export default function GPTSalonAnalysisPage() {
     }
     loadBranches()
   }, [])
-
   // ───────── 메인 데이터 불러오기 ─────────
   useEffect(() => {
     if (!branch || !startMonth || !endMonth) return
@@ -83,7 +82,7 @@ export default function GPTSalonAnalysisPage() {
       try {
         const headers = await apiAuthHeader()
 
-        // 1️⃣ 월별 기본 데이터
+        // 1️⃣ 월별 기본 데이터 (카테고리 기준 매출)
         const res = await fetch(`${API_BASE}/salon/monthly-data`, {
           method: 'POST',
           headers: { ...headers, 'Content-Type': 'application/json' },
@@ -92,9 +91,29 @@ export default function GPTSalonAnalysisPage() {
         })
         const json = await res.json()
         if (!res.ok) throw new Error(json.detail || '월별 데이터 불러오기 실패')
-        const baseMonths: MonthBlock[] = json.months || []
+        const baseMonths = json.months || []
 
-        // 2️⃣ 고정/변동지출 + 사업자배당
+        // 2️⃣ 직접 입력 매출 (입력 데이터) 불러오기
+        const inputRes = await fetch(`${API_BASE}/salon/input-sales`, {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ branch, start_month: startMonth, end_month: endMonth }),
+        })
+        const inputJson = await inputRes.json()
+        const inputMap: Record<
+          string,
+          { input_card_sales: number; input_pay_sales: number }
+        > = {}
+
+        inputJson?.forEach?.((r: any) => {
+          inputMap[r.month] = {
+            input_card_sales: r.card_sales || 0,
+            input_pay_sales: r.pay_sales || 0,
+          }
+        })
+
+        // 3️⃣ 지출 / 배당
         const expRes = await fetch(`${API_BASE}/transactions/summary`, {
           method: 'POST',
           headers: { ...headers, 'Content-Type': 'application/json' },
@@ -102,21 +121,18 @@ export default function GPTSalonAnalysisPage() {
           body: JSON.stringify({ branch, start_month: startMonth, end_month: endMonth }),
         })
         const expJson = await expRes.json()
-
         const expMap: Record<string, { fixed_expense: number; variable_expense: number }> = {}
         const dividendMap: Record<string, number> = {}
-
-        // ✅ 백엔드 응답이 category별이 아니라, 월 단위 합산 형태일 경우 처리
         expJson?.forEach?.((r: any) => {
           const m = r.month
           expMap[m] = {
-            fixed_expense: r.fixed_expense || r.total_fixed_expense || 0,
-            variable_expense: r.variable_expense || r.total_variable_expense || 0,
+            fixed_expense: r.fixed_expense || 0,
+            variable_expense: r.variable_expense || 0,
           }
-          dividendMap[m] = r.owner_dividend || r.dividend || 0
+          dividendMap[m] = r.owner_dividend || 0
         })
-        
-        // 3️⃣ 급여 / 인원수
+
+        // 4️⃣ 급여 / 인원
         const { data: salaryData } = await supabase
           .from('designer_salaries')
           .select('name, rank, month, total_amount')
@@ -126,12 +142,7 @@ export default function GPTSalonAnalysisPage() {
 
         const salaryByMonth: Record<
           string,
-          {
-            designers_count: number
-            interns_count: number
-            advisors_count: number
-            salaries: SalaryItem[]
-          }
+          { designers_count: number; interns_count: number; advisors_count: number; salaries: any[] }
         > = {}
 
         salaryData?.forEach((r) => {
@@ -144,7 +155,6 @@ export default function GPTSalonAnalysisPage() {
               salaries: [],
             }
           }
-
           const rank = (r.rank || '').toLowerCase()
           if (/디자이너|실장|부원장|대표원장|대표/.test(rank)) salaryByMonth[m].designers_count++
           else if (/인턴/.test(rank)) salaryByMonth[m].interns_count++
@@ -157,7 +167,7 @@ export default function GPTSalonAnalysisPage() {
           })
         })
 
-        // 4️⃣ 월별 사업자 유입 계산
+        // 5️⃣ 월별 사업자 유입
         const inflowByMonth: Record<string, number> = {}
         for (const b of baseMonths) {
           const inflowRes = await fetch(`${API_BASE}/transactions/income-filtered`, {
@@ -170,12 +180,16 @@ export default function GPTSalonAnalysisPage() {
           inflowByMonth[b.month] = inflowJson.bank_inflow || 0
         }
 
-        // 5️⃣ 병합
-        const merged = baseMonths.map((b) => ({
+        // 6️⃣ 모든 데이터 병합
+        const merged = baseMonths.map((b: any) => ({
           ...b,
+          input_card_sales: inputMap[b.month]?.input_card_sales || 0, // ✅ 실제 입력 데이터
+          input_pay_sales: inputMap[b.month]?.input_pay_sales || 0,
+          category_card_sales: b.card_sales, // ✅ 엑셀/카테고리 기준
+          category_pay_sales: b.pay_sales,
           fixed_expense: expMap[b.month]?.fixed_expense || 0,
           variable_expense: expMap[b.month]?.variable_expense || 0,
-          owner_dividend: dividendMap[b.month] || 0, // ✅ 추가
+          owner_dividend: dividendMap[b.month] || 0,
           designers_count: salaryByMonth[b.month]?.designers_count || 0,
           interns_count: salaryByMonth[b.month]?.interns_count || 0,
           advisors_count: salaryByMonth[b.month]?.advisors_count || 0,
@@ -193,6 +207,7 @@ export default function GPTSalonAnalysisPage() {
 
     fetchAll()
   }, [branch, startMonth, endMonth])
+
 
   // ───────── 통장 잔액 ─────────
   useEffect(() => {
@@ -217,6 +232,7 @@ export default function GPTSalonAnalysisPage() {
 
   const toggleMonth = (m: string) => setOpenMonths((p) => ({ ...p, [m]: !p[m] }))
 
+
   // 🧠 GPT 분석 호출
   const handleAnalyze = async () => {
     if (!branch || !startMonth || !endMonth) return alert('지점과 기간을 선택하세요.')
@@ -230,16 +246,7 @@ export default function GPTSalonAnalysisPage() {
         branch,
         start_month: startMonth,
         end_month: endMonth,
-        months: monthBlocks,
-        total_fixed_expense: totalFixedExpense,
-        total_variable_expense: totalVariableExpense,
-        total_expense: totalExpense,
-        total_pass_paid: totalPassPaid,
-        total_pass_used: totalPassUsed,
-        total_pass_balance: totalPassBalance,
-        total_bank_inflow: totalBankInflow,
-        cash_balance: cashBalance,
-        owner_dividend: totalOwnerDividend, // ✅ 추가
+        months: monthBlocks, // ✅ 이제 input_* / category_* 모두 포함됨
       }
 
       const res = await fetch(`${API_BASE}/gpt/salon-analysis`, {
