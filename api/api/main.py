@@ -2022,7 +2022,7 @@ async def salon_analysis(
     # ✅ 병합: 이제 하나의 테이블만 사용
     months = (
         supabase.table("salon_monthly_data")
-        .select("month, card_sales, pay_sales, cash_sales, account_sales, pass_paid, pass_used, fixed_expense, variable_expense, owner_dividend")
+        .select("month, card_sales, pay_sales, cash_sales, account_sales, pass_paid, pass_used, fixed_expense, variable_expense")
         .eq("user_id", user_id)
         .eq("branch", branch)
         .gte("month", start_month)
