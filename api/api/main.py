@@ -1992,14 +1992,14 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         print("⚠️ 통장 잔액 조회 실패:", e)
         raise HTTPException(status_code=500, detail=str(e))
     
-# === 💈 제이가빈 회계 자동분석 리포트 (V5.0 — 실현매출 기준 + 수수료율 정상화판) ===
+# === 💈 제이가빈 회계 자동분석 리포트 (V5.1 — 실데이터 자동반영판) ===
 @app.post("/gpt/salon-analysis")
 async def salon_analysis(
     body: dict = Body(...),
     authorization: Optional[str] = Header(None),
 ):
     """
-    💈 제이가빈 회계 자동분석 리포트 (V5.0 — 입력 vs 카테고리 수수료율 계산 반영판)
+    💈 제이가빈 회계 자동분석 리포트 (V5.1 — 실데이터 자동반영판)
     - 수수료율: (입력된 매출 - 카테고리 매출) / 입력된 매출 × 100
     - 카드/페이 각각 계산 후 가중 평균
     """
@@ -2008,10 +2008,68 @@ async def salon_analysis(
 
     # === 기본 정보 ===
     user_id = await get_user_id(authorization)
-    branch = body.get("branch", "지점명 미입력")
-    months = body.get("months", [])
-    if not months:
-        raise HTTPException(status_code=400, detail="months 데이터 누락")
+    branch = body.get("branch")
+    start_month = body.get("start_month")
+    end_month = body.get("end_month")
+
+    if not all([branch, start_month, end_month]):
+        raise HTTPException(status_code=400, detail="branch, start_month, end_month 필수")
+
+    print(f"💈 [SalonAnalysis] branch={branch}, 기간={start_month}~{end_month}")
+
+    # === 실제 DB에서 데이터 불러오기 ===
+    # 1️⃣ 입력 매출 (사용자 직접 입력값)
+    input_sales = (
+        supabase.table("salon_input_sales")
+        .select("month, card_sales, pay_sales")
+        .eq("user_id", user_id)
+        .eq("branch", branch)
+        .gte("month", start_month)
+        .lte("month", end_month)
+        .execute()
+        .data or []
+    )
+
+    # 2️⃣ 카테고리 매출 (salon_monthly_data)
+    category_sales = (
+        supabase.table("salon_monthly_data")
+        .select("month, card_sales, pay_sales, cash_sales, account_sales, pass_paid, pass_used")
+        .eq("user_id", user_id)
+        .eq("branch", branch)
+        .gte("month", start_month)
+        .lte("month", end_month)
+        .execute()
+        .data or []
+    )
+
+    # 3️⃣ 지출 및 기타 데이터 (transactions summary)
+    expense_data = (
+        supabase.table("transactions_summary")
+        .select("month, fixed_expense, variable_expense, owner_dividend")
+        .eq("user_id", user_id)
+        .eq("branch", branch)
+        .gte("month", start_month)
+        .lte("month", end_month)
+        .execute()
+        .data or []
+    )
+
+    # === 데이터 병합 (월 기준 join)
+    df_input = pd.DataFrame(input_sales)
+    df_cat = pd.DataFrame(category_sales)
+    df_exp = pd.DataFrame(expense_data)
+
+    months_df = (
+        df_cat.merge(df_input, on="month", how="outer", suffixes=("", "_input"))
+            .merge(df_exp, on="month", how="outer")
+            .fillna(0)
+    )
+
+    months = months_df.to_dict(orient="records")
+
+    print(f"📦 병합된 월 데이터 {len(months)}건")
+    for m in months:
+        print(f"  └─ {m['month']} 카드:{m.get('card_sales',0):,.0f} 페이:{m.get('pay_sales',0):,.0f}")
 
     # === Helpers ===
     def clamp_percent(x: float) -> float:
@@ -2068,10 +2126,14 @@ async def salon_analysis(
             labor_cost = fetch_payroll(branch, month)
 
         # === 실현매출 ===
-        if total_sales < (pass_paid + pass_used):
-            realized_sales = total_sales + pass_used
-        else:
-            realized_sales = (total_sales - pass_paid) + pass_used
+        realized_sales = (total_sales - pass_paid) + pass_used
+
+        # === 현금흐름 ===
+        bank_outflow = float(m.get("bank_outflow", 0) or 0)
+        if bank_outflow == 0:
+            # 급여(labor_cost)는 이미 거래에서 음수로 반영되어 있을 가능성이 높으므로
+            # (summary에 포함되어 있다면) 중복 방지 위해 제외하는 게 안전
+            bank_outflow = fixed_exp + var_exp + owner_dividend
 
         # === 정액권 잔액 관리 ===
         running_pass_balance += pass_paid - pass_used
@@ -2187,7 +2249,7 @@ async def salon_analysis(
 
     # === GPT 프롬프트 (변경 없음) ===
     prompt = f"""
-💈 제이가빈 회계 자동분석 리포트 (V5.0 — 입력 vs 카테고리 수수료율 적용판)
+# === 💈 제이가빈 회계 자동분석 리포트 (V5.1 — 실데이터 자동반영판) ===
 지점명: {branch}
 분석기간: {start_month} ~ {end_month}
 

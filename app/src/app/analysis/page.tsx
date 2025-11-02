@@ -180,22 +180,41 @@ export default function GPTSalonAnalysisPage() {
           inflowByMonth[b.month] = inflowJson.bank_inflow || 0
         }
 
-        // 6️⃣ 모든 데이터 병합
-        const merged = baseMonths.map((b: any) => ({
-          ...b,
-          input_card_sales: inputMap[b.month]?.input_card_sales || 0, // ✅ 실제 입력 데이터
-          input_pay_sales: inputMap[b.month]?.input_pay_sales || 0,
-          category_card_sales: b.card_sales, // ✅ 엑셀/카테고리 기준
-          category_pay_sales: b.pay_sales,
-          fixed_expense: expMap[b.month]?.fixed_expense || 0,
-          variable_expense: expMap[b.month]?.variable_expense || 0,
-          owner_dividend: dividendMap[b.month] || 0,
-          designers_count: salaryByMonth[b.month]?.designers_count || 0,
-          interns_count: salaryByMonth[b.month]?.interns_count || 0,
-          advisors_count: salaryByMonth[b.month]?.advisors_count || 0,
-          salaries: salaryByMonth[b.month]?.salaries || [],
-          bank_inflow: inflowByMonth[b.month] || 0,
-        }))
+        // 6️⃣ 모든 데이터 병합 (💰 현금흐름 반영판)
+        const merged = baseMonths.map((b: any) => {
+          const fixed = expMap[b.month]?.fixed_expense || 0
+          const variable = expMap[b.month]?.variable_expense || 0
+          const dividend = dividendMap[b.month] || 0
+          const outflow = fixed + variable + dividend // ✅ 월 지출 총합 (현금유출로 반영)
+
+          return {
+            ...b,
+            // 입력 매출 (원장 입력)
+            input_card_sales: inputMap[b.month]?.input_card_sales || 0,
+            input_pay_sales: inputMap[b.month]?.input_pay_sales || 0,
+
+            // 카테고리 기준 매출
+            category_card_sales: b.card_sales,
+            category_pay_sales: b.pay_sales,
+
+            // 지출/배당
+            fixed_expense: fixed,
+            variable_expense: variable,
+            owner_dividend: dividend,
+
+            // ✅ 현금유출 합산 (백엔드 cash_flow 계산용)
+            bank_outflow: outflow,
+
+            // 급여 / 인원
+            designers_count: salaryByMonth[b.month]?.designers_count || 0,
+            interns_count: salaryByMonth[b.month]?.interns_count || 0,
+            advisors_count: salaryByMonth[b.month]?.advisors_count || 0,
+            salaries: salaryByMonth[b.month]?.salaries || [],
+
+            // 유입
+            bank_inflow: inflowByMonth[b.month] || 0,
+          }
+        })
 
         setMonthBlocks(merged)
       } catch (err: any) {
