@@ -2044,16 +2044,35 @@ async def salon_analysis(
     )
 
     # 3️⃣ 지출 및 기타 데이터 (transactions summary)
-    expense_data = (
+    # transactions 테이블은 month가 없으므로 tx_date 기준으로 조회 + pandas로 월 계산
+    res_exp = (
         supabase.table("transactions")
-        .select("month, fixed_expense, variable_expense, owner_dividend")
+        .select("tx_date, amount, is_fixed, category")
         .eq("user_id", user_id)
         .eq("branch", branch)
-        .gte("month", start_month)
-        .lte("month", end_month)
+        .gte("tx_date", f"{start_month}-01")
+        .lte("tx_date", pd.Period(end_month).end_time.strftime("%Y-%m-%d"))
         .execute()
-        .data or []
     )
+
+    df_tx = pd.DataFrame(res_exp.data or [])
+    if not df_tx.empty:
+        df_tx["month"] = pd.to_datetime(df_tx["tx_date"]).dt.strftime("%Y-%m")
+        df_tx["amount"] = pd.to_numeric(df_tx["amount"], errors="coerce").fillna(0)
+        df_tx["is_fixed"] = df_tx["is_fixed"].fillna(False)
+
+        expense_data = (
+            df_tx.groupby("month")
+            .apply(lambda x: pd.Series({
+                "fixed_expense": abs(x.loc[(x["is_fixed"] == True) & (x["amount"] < 0), "amount"].sum()),
+                "variable_expense": abs(x.loc[(x["is_fixed"] == False) & (x["amount"] < 0), "amount"].sum()),
+                "owner_dividend": abs(x.loc[(x["category"] == "사업자배당") & (x["amount"] < 0), "amount"].sum()),
+            }))
+            .reset_index()
+            .to_dict(orient="records")
+        )
+    else:
+        expense_data = []
 
     # === 데이터 병합 (월 기준 join)
     df_input = pd.DataFrame(months) 
