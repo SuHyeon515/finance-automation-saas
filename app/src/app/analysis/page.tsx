@@ -90,10 +90,11 @@ export default function DiagnosisPage() {
       setLoadingGpt(false)
     }
   }
-
+  
   // ✅ 엑셀 다운로드 (1차 결과)
   const downloadExcel = () => {
     if (!calcResult?.months) return alert('다운로드할 데이터가 없습니다.')
+
     const rows = calcResult.months.map((m: any) => ({
       월: m.month,
       총매출: m.monthly_sales,
@@ -107,17 +108,18 @@ export default function DiagnosisPage() {
       재료비비율: m.material_ratio?.toFixed(1) + '%',
       영업이익률: m.op_margin_est?.toFixed(1) + '%'
     }))
-    const csv =
-      Object.keys(rows[0]).join(',') +
-      '\n' +
-      rows.map(r => Object.values(r).join(',')).join('\n')
+
+    const headers = Object.keys(rows[0]).join(',')
+    const body = rows.map((r: Record<string, any>) => Object.values(r).join(',')).join('\n')
+    const csv = `${headers}\n${body}`
+
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
+    const url = window.URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
     a.download = `${branch}_${startMonth}_${endMonth}_진단.csv`
     a.click()
-    URL.revokeObjectURL(url)
+    window.URL.revokeObjectURL(url)
   }
 
   return (
