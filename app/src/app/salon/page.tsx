@@ -15,7 +15,8 @@ export default function SalonDataEntryPage() {
     visitors: 0,
     reviews: 0,
     pass_paid: 0,
-    pass_used: 0
+    pass_used: 0,
+    returning_visitors: 0
   })
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -62,16 +63,17 @@ export default function SalonDataEntryPage() {
       }
 
       if (data) {
-        setForm({
-          card_sales: data.card_sales || 0,
-          pay_sales: data.pay_sales || 0,
-          cash_sales: data.cash_sales || 0,
-          account_sales: data.account_sales || 0,
-          visitors: data.visitors || 0,
-          reviews: data.reviews || 0,
-          pass_paid: data.pass_paid || 0,
-          pass_used: data.pass_used || 0
-        })
+      setForm({
+        card_sales: data.card_sales || 0,
+        pay_sales: data.pay_sales || 0,
+        cash_sales: data.cash_sales || 0,
+        account_sales: data.account_sales || 0,
+        visitors: data.visitors || 0,
+        reviews: data.reviews || 0,
+        pass_paid: data.pass_paid || 0,
+        pass_used: data.pass_used || 0,
+        returning_visitors: data.returning_visitors || 0  // ✅ 추가
+      })
       } else {
         setForm({
           card_sales: 0,
@@ -81,7 +83,8 @@ export default function SalonDataEntryPage() {
           visitors: 0,
           reviews: 0,
           pass_paid: 0,
-          pass_used: 0
+          pass_used: 0,
+          returning_visitors: 0
         })
       }
     }
@@ -121,7 +124,7 @@ export default function SalonDataEntryPage() {
     setLoadingList(true)
     const { data, error } = await supabase
       .from('salon_monthly_data')
-      .select('id, branch, month, total_sales, visitors, reviews, pass_paid, pass_used, pass_balance, updated_at')
+      .select('id, branch, month, total_sales, visitors, returning_visitors, reviews, pass_paid, pass_used, pass_balance, updated_at')
       .eq('user_id', user.id)
       .order('updated_at', { ascending: false })
       .limit(10)
@@ -153,7 +156,8 @@ export default function SalonDataEntryPage() {
       visitors: row.visitors || 0,
       reviews: row.reviews || 0,
       pass_paid: row.pass_paid || 0,
-      pass_used: row.pass_used || 0
+      pass_used: row.pass_used || 0,
+      returning_visitors: row.returning_visitors || 0
     })
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -207,10 +211,35 @@ export default function SalonDataEntryPage() {
         />
       </div>
 
-      {/* 방문객 / 리뷰 */}
-      <div className="grid grid-cols-2 gap-4 pt-4">
-        <div><label>방문객 수</label><input type="number" value={form.visitors} onChange={e => setForm({...form,visitors:+e.target.value})} className="border rounded w-full p-2" /></div>
-        <div><label>리뷰 수</label><input type="number" value={form.reviews} onChange={e => setForm({...form,reviews:+e.target.value})} className="border rounded w-full p-2" /></div>
+      {/* 방문객 / 리뷰 / 재방문 */}
+      <div className="grid grid-cols-3 gap-4 pt-4">
+        <div>
+          <label>방문객 수</label>
+          <input
+            type="number"
+            value={form.visitors}
+            onChange={e => setForm({ ...form, visitors: +e.target.value })}
+            className="border rounded w-full p-2"
+          />
+        </div>
+        <div>
+          <label>리뷰 수</label>
+          <input
+            type="number"
+            value={form.reviews}
+            onChange={e => setForm({ ...form, reviews: +e.target.value })}
+            className="border rounded w-full p-2"
+          />
+        </div>
+        <div>
+          <label>재방문 고객 수</label> {/* ✅ 추가 */}
+          <input
+            type="number"
+            value={form.returning_visitors}
+            onChange={e => setForm({ ...form, returning_visitors: +e.target.value })}
+            className="border rounded w-full p-2"
+          />
+        </div>
       </div>
 
       {/* 정액권 */}
@@ -259,6 +288,7 @@ export default function SalonDataEntryPage() {
                 <th className="p-2 border">월</th>
                 <th className="p-2 border">총매출</th>
                 <th className="p-2 border">방문객</th>
+                <th className="p-2 border">재방문</th>
                 <th className="p-2 border">리뷰</th>
                 <th className="p-2 border">정액권 잔액</th>
                 <th className="p-2 border">수정일</th>
@@ -276,6 +306,7 @@ export default function SalonDataEntryPage() {
                   <td className="border p-2">{row.month}</td>
                   <td className="border p-2">{(row.total_sales || 0).toLocaleString()}</td>
                   <td className="border p-2">{row.visitors}</td>
+                  <td className="border p-2">{row.returning_visitors}</td>
                   <td className="border p-2">{row.reviews}</td>
                   <td className="border p-2">{(row.pass_balance || 0).toLocaleString()}</td>
                   <td className="border p-2 text-gray-500 text-xs">

@@ -1,547 +1,273 @@
 'use client'
-import { useEffect, useState, useRef } from 'react'
-import { API_BASE, apiAuthHeader } from '@/lib/api'
+import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
+import { API_BASE, apiAuthHeader } from '@/lib/api'
 
-type SalaryItem = {
-  name: string
-  rank: string
-  total_amount: number
-}
+// 간단한 금액 포맷 함수
+const fmt = (n: number | null | undefined) =>
+  n !== null && n !== undefined ? n.toLocaleString() : '-'
 
-type MonthBlock = {
-  month: string
-  card_sales: number
-  pay_sales: number
-  cash_sales: number
-  account_sales: number
-  visitors: number
-  reviews: number
-  pass_paid: number
-  pass_used: number
-  pass_balance: number
-  designers_count: number
-  interns_count: number
-  advisors_count: number
-  salaries: SalaryItem[]
-  fixed_expense: number
-  variable_expense: number
-  bank_inflow: number
-  owner_dividend?: number // ✅ 사업자배당 항목 추가
-}
-
-export default function GPTSalonAnalysisPage() {
+export default function DiagnosisPage() {
   const [branches, setBranches] = useState<string[]>([])
   const [branch, setBranch] = useState('')
   const [startMonth, setStartMonth] = useState('')
   const [endMonth, setEndMonth] = useState('')
-  const [monthBlocks, setMonthBlocks] = useState<MonthBlock[]>([])
-  const [openMonths, setOpenMonths] = useState<Record<string, boolean>>({})
-  const [cashBalance, setCashBalance] = useState(0)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const [calcResult, setCalcResult] = useState<any>(null) // 1차 계산 결과
+  const [gptResult, setGptResult] = useState<any>(null)   // GPT 분석 결과
+  const [loadingGpt, setLoadingGpt] = useState(false)
+  
 
-  // ✅ GPT 분석 관련 state
-  const [result, setResult] = useState('')
-  const [title, setTitle] = useState('')
-  const [analyzing, setAnalyzing] = useState(false)
-  const [analysisId, setAnalysisId] = useState<string | null>(null)
-  const resultRef = useRef<HTMLDivElement>(null)
-
-  // ✅ 전체 합계 계산
-  const totalPassPaid = monthBlocks.reduce((s, b) => s + (b.pass_paid || 0), 0)
-  const totalPassUsed = monthBlocks.reduce((s, b) => s + (b.pass_used || 0), 0)
-  const totalPassBalance = totalPassPaid - totalPassUsed
-  const totalFixedExpense = monthBlocks.reduce((s, b) => s + (b.fixed_expense || 0), 0)
-  const totalVariableExpense = monthBlocks.reduce((s, b) => s + (b.variable_expense || 0), 0)
-  const totalExpense = totalFixedExpense + totalVariableExpense
-  const totalBankInflow = monthBlocks.reduce((s, b) => s + (b.bank_inflow || 0), 0)
-  const totalOwnerDividend = monthBlocks.reduce((s, b) => s + (b.owner_dividend || 0), 0) // ✅ 추가
-
-  // ───────── 지점 목록 불러오기 ─────────
+  // ✅ 초기 지점 목록 로드
   useEffect(() => {
-    const loadBranches = async () => {
-      try {
-        const headers = await apiAuthHeader()
-        const res = await fetch(`${API_BASE}/meta/branches`, { headers, credentials: 'include' })
-        const json = await res.json()
-        setBranches(Array.isArray(json) ? json : [])
-      } catch {
-        setBranches([])
-      }
-    }
-    loadBranches()
-  }, [])
-  // ───────── 메인 데이터 불러오기 ─────────
-  useEffect(() => {
-    if (!branch || !startMonth || !endMonth) return
-
-    const fetchAll = async () => {
-      setLoading(true)
-      setError('')
-      try {
-        const headers = await apiAuthHeader()
-
-        // 1️⃣ 월별 기본 데이터 (카테고리 기준 매출)
-        const res = await fetch(`${API_BASE}/salon/monthly-data`, {
-          method: 'POST',
-          headers: { ...headers, 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ branch, start_month: startMonth, end_month: endMonth }),
-        })
-        const json = await res.json()
-        if (!res.ok) throw new Error(json.detail || '월별 데이터 불러오기 실패')
-        const baseMonths = json.months || []
-
-        // 2️⃣ 직접 입력 매출 (입력 데이터) 불러오기
-        const inputRes = await fetch(`${API_BASE}/salon/input-sales`, {
-          method: 'POST',
-          headers: { ...headers, 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ branch, start_month: startMonth, end_month: endMonth }),
-        })
-        const inputJson = await inputRes.json()
-        const inputMap: Record<
-          string,
-          { input_card_sales: number; input_pay_sales: number }
-        > = {}
-
-        inputJson?.forEach?.((r: any) => {
-          inputMap[r.month] = {
-            input_card_sales: r.card_sales || 0,
-            input_pay_sales: r.pay_sales || 0,
-          }
-        })
-
-        // 3️⃣ 지출 / 배당
-        const expRes = await fetch(`${API_BASE}/transactions/summary`, {
-          method: 'POST',
-          headers: { ...headers, 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ branch, start_month: startMonth, end_month: endMonth }),
-        })
-        const expJson = await expRes.json()
-        const expMap: Record<string, { fixed_expense: number; variable_expense: number }> = {}
-        const dividendMap: Record<string, number> = {}
-        expJson?.forEach?.((r: any) => {
-          const m = r.month
-          expMap[m] = {
-            fixed_expense: r.fixed_expense || 0,
-            variable_expense: r.variable_expense || 0,
-          }
-          dividendMap[m] = r.owner_dividend || 0
-        })
-
-        // 4️⃣ 급여 / 인원
-        const { data: salaryData } = await supabase
-          .from('designer_salaries')
-          .select('name, rank, month, total_amount')
-          .eq('branch', branch)
-          .gte('month', startMonth)
-          .lte('month', endMonth)
-
-        const salaryByMonth: Record<
-          string,
-          { designers_count: number; interns_count: number; advisors_count: number; salaries: any[] }
-        > = {}
-
-        salaryData?.forEach((r) => {
-          const m = r.month
-          if (!salaryByMonth[m]) {
-            salaryByMonth[m] = {
-              designers_count: 0,
-              interns_count: 0,
-              advisors_count: 0,
-              salaries: [],
-            }
-          }
-          const rank = (r.rank || '').toLowerCase()
-          if (/디자이너|실장|부원장|대표원장|대표/.test(rank)) salaryByMonth[m].designers_count++
-          else if (/인턴/.test(rank)) salaryByMonth[m].interns_count++
-          else if (/바이저|매니저/.test(rank)) salaryByMonth[m].advisors_count++
-
-          salaryByMonth[m].salaries.push({
-            name: r.name,
-            rank: r.rank,
-            total_amount: r.total_amount,
-          })
-        })
-
-        // 5️⃣ 월별 사업자 유입
-        const inflowByMonth: Record<string, number> = {}
-        for (const b of baseMonths) {
-          const inflowRes = await fetch(`${API_BASE}/transactions/income-filtered`, {
-            method: 'POST',
-            headers: { ...headers, 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ branch, start_month: b.month, end_month: b.month }),
-          })
-          const inflowJson = await inflowRes.json()
-          inflowByMonth[b.month] = inflowJson.bank_inflow || 0
-        }
-
-        // 6️⃣ 모든 데이터 병합 (💰 현금흐름 반영판)
-        const merged = baseMonths.map((b: any) => {
-          const fixed = expMap[b.month]?.fixed_expense || 0
-          const variable = expMap[b.month]?.variable_expense || 0
-          const dividend = dividendMap[b.month] || 0
-          const outflow = fixed + variable + dividend // ✅ 월 지출 총합 (현금유출로 반영)
-
-          return {
-            ...b,
-            // 입력 매출 (원장 입력)
-            input_card_sales: inputMap[b.month]?.input_card_sales || 0,
-            input_pay_sales: inputMap[b.month]?.input_pay_sales || 0,
-
-            // 카테고리 기준 매출
-            category_card_sales: b.card_sales,
-            category_pay_sales: b.pay_sales,
-
-            // 지출/배당
-            fixed_expense: fixed,
-            variable_expense: variable,
-            owner_dividend: dividend,
-
-            // ✅ 현금유출 합산 (백엔드 cash_flow 계산용)
-            bank_outflow: outflow,
-
-            // 급여 / 인원
-            designers_count: salaryByMonth[b.month]?.designers_count || 0,
-            interns_count: salaryByMonth[b.month]?.interns_count || 0,
-            advisors_count: salaryByMonth[b.month]?.advisors_count || 0,
-            salaries: salaryByMonth[b.month]?.salaries || [],
-
-            // 유입
-            bank_inflow: inflowByMonth[b.month] || 0,
-          }
-        })
-
-        setMonthBlocks(merged)
-      } catch (err: any) {
-        setError(err.message)
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    fetchAll()
-  }, [branch, startMonth, endMonth])
-
-
-  // ───────── 통장 잔액 ─────────
-  useEffect(() => {
-    const fetchBalance = async () => {
-      if (!branch || !endMonth) return
+    (async () => {
       const headers = await apiAuthHeader()
-      try {
-        const res = await fetch(`${API_BASE}/transactions/latest-balance`, {
-          method: 'POST',
-          headers: { ...headers, 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ branch, end_month: endMonth }),
-        })
-        const json = await res.json()
-        setCashBalance(json.balance || 0)
-      } catch {
-        setCashBalance(0)
-      }
+      const res = await fetch(`${API_BASE}/meta/branches`, {
+        headers,
+        credentials: 'include'
+      })
+      const json = await res.json()
+      setBranches(Array.isArray(json) ? json : [])
+    })()
+  }, [])
+
+  // ✅ 1차 계산 결과 불러오기
+  const loadCalculation = async () => {
+    if (!branch || !startMonth || !endMonth) {
+      alert('지점과 기간을 선택하세요.')
+      return
     }
-    fetchBalance()
-  }, [branch, endMonth])
-
-  const toggleMonth = (m: string) => setOpenMonths((p) => ({ ...p, [m]: !p[m] }))
-
-
-  // 🧠 GPT 분석 호출
-  const handleAnalyze = async () => {
-    if (!branch || !startMonth || !endMonth) return alert('지점과 기간을 선택하세요.')
-    setAnalyzing(true)
-    setResult('')
-    setTitle('')
+    setLoading(true)
+    setCalcResult(null)
+    setGptResult(null)
 
     try {
       const headers = await apiAuthHeader()
-      const payload = {
-        branch,
-        start_month: startMonth,
-        end_month: endMonth,
-        months: monthBlocks, // ✅ 이제 input_* / category_* 모두 포함됨
-      }
-
-      const res = await fetch(`${API_BASE}/gpt/salon-analysis`, {
+      const res = await fetch(`${API_BASE}/gpt/financial-diagnosis`, {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ branch, start_month: startMonth, end_month: endMonth }),
+        credentials: 'include'
       })
-      const data = await res.json()
-
-      if (!res.ok) throw new Error(data?.detail || 'GPT 분석 실패')
-
-      setResult(data.analysis)
-      setTitle(data.title)
-      setAnalysisId(data.analysis_id || null)
-      setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth' }), 300)
-    } catch (err: any) {
-      alert(err.message)
+      const json = await res.json()
+      if (res.ok) {
+        setCalcResult(json)
+      } else {
+        alert(json.detail || '진단 데이터 불러오기 실패')
+      }
+    } catch (err) {
+      console.error(err)
+      alert('데이터 로드 중 오류 발생')
     } finally {
-      setAnalyzing(false)
+      setLoading(false)
     }
   }
 
- return (
-  <main className="p-6 max-w-6xl mx-auto space-y-8">
-    <h1 className="text-2xl font-bold">📊 미용실 재무 리포트</h1>
+  // ✅ GPT 분석 요청 (버튼 클릭 시)
+  const runGPT = async () => {
+    if (!calcResult) return alert('먼저 계산 결과를 불러오세요.')
+    setLoadingGpt(true)
+    setGptResult(null)
+    try {
+      const headers = await apiAuthHeader()
+      const res = await fetch(`${API_BASE}/gpt/financial-diagnosis`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          branch,
+          start_month: startMonth,
+          end_month: endMonth
+        }),
+        credentials: 'include'
+      })
+      const json = await res.json()
+      if (res.ok) setGptResult(json)
+      else alert(json.detail || 'GPT 분석 실패')
+    } catch (e) {
+      alert('GPT 분석 중 오류')
+      console.error(e)
+    } finally {
+      setLoadingGpt(false)
+    }
+  }
 
-    {/* 지점 / 기간 선택 */}
-    <section className="grid sm:grid-cols-3 gap-4">
-      <div>
-        <label className="text-sm text-gray-600">지점</label>
+  // ✅ 엑셀 다운로드 (1차 결과)
+  const downloadExcel = () => {
+    if (!calcResult?.months) return alert('다운로드할 데이터가 없습니다.')
+    const rows = calcResult.months.map((m: any) => ({
+      월: m.month,
+      총매출: m.monthly_sales,
+      방문객수: m.visitors,
+      재방문객수: m.returning_visitors,
+      객단가: Math.round(m.unit_sales),
+      재방문율: m.revisit_rate?.toFixed(1) + '%',
+      정액권비중: m.pass_ratio?.toFixed(1) + '%',
+      고정비비율: m.fixed_ratio?.toFixed(1) + '%',
+      인건비비율: m.labor_ratio?.toFixed(1) + '%',
+      재료비비율: m.material_ratio?.toFixed(1) + '%',
+      영업이익률: m.op_margin_est?.toFixed(1) + '%'
+    }))
+    const csv =
+      Object.keys(rows[0]).join(',') +
+      '\n' +
+      rows.map(r => Object.values(r).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${branch}_${startMonth}_${endMonth}_진단.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <main className="max-w-5xl mx-auto p-6 space-y-8">
+      <h1 className="text-2xl font-bold">💇‍♀️ 미용실 재무건전성 진단</h1>
+
+      {/* === 입력 영역 === */}
+      <div className="grid grid-cols-4 gap-3">
         <select
+          className="border rounded p-2"
           value={branch}
-          onChange={(e) => setBranch(e.target.value)}
-          className="border rounded px-3 py-2 w-full"
+          onChange={e => setBranch(e.target.value)}
         >
-          <option value="">-- 선택 --</option>
-          {branches.map((b) => (
+          <option value="">--지점--</option>
+          {branches.map(b => (
             <option key={b}>{b}</option>
           ))}
         </select>
-      </div>
-      <div>
-        <label className="text-sm text-gray-600">시작 월</label>
         <input
           type="month"
+          className="border rounded p-2"
           value={startMonth}
-          onChange={(e) => setStartMonth(e.target.value)}
-          className="border rounded px-3 py-2 w-full"
+          onChange={e => setStartMonth(e.target.value)}
         />
-      </div>
-      <div>
-        <label className="text-sm text-gray-600">종료 월</label>
         <input
           type="month"
+          className="border rounded p-2"
           value={endMonth}
-          onChange={(e) => setEndMonth(e.target.value)}
-          className="border rounded px-3 py-2 w-full"
+          onChange={e => setEndMonth(e.target.value)}
         />
-      </div>
-    </section>
-
-    {loading && <p className="text-blue-500 animate-pulse">📡 데이터 불러오는 중...</p>}
-    {error && <p className="text-red-500">{error}</p>}
-
-    {/* 월별 블록 */}
-    {monthBlocks.map((b, i) => (
-      <section key={i} className="border rounded-lg bg-gray-50">
-        <div
-          className="flex justify-between items-center p-4 cursor-pointer hover:bg-gray-100"
-          onClick={() => toggleMonth(b.month)}
+        <button
+          onClick={loadCalculation}
+          disabled={loading}
+          className="bg-black text-white rounded p-2 hover:opacity-80"
         >
-          <h2 className="font-semibold text-lg">📆 {b.month}</h2>
-          <span className="text-sm text-gray-600">
-            {openMonths[b.month] ? '▲ 접기' : '▼ 펼치기'}
-          </span>
-        </div>
+          {loading ? '불러오는 중...' : '📊 1차 계산 실행'}
+        </button>
+      </div>
 
-        {openMonths[b.month] && (
-          <div className="p-4 border-t space-y-4">
-            <p className="text-sm">
-              👥 디자이너 {b.designers_count}명 / 인턴 {b.interns_count}명 / 바이저{' '}
-              {b.advisors_count}명
+      {/* === 1차 계산 결과 === */}
+      {calcResult && (
+        <section className="space-y-5">
+          <div className="flex justify-between items-center">
+            <h2 className="text-xl font-semibold">
+              📅 {calcResult.branch} ({calcResult.period})
+            </h2>
+            <div className="space-x-3">
+              <span className="text-sm text-gray-600">
+                등급 예상: <b>{calcResult.grade}</b>
+              </span>
+              <button
+                onClick={downloadExcel}
+                className="border px-3 py-1 rounded hover:bg-gray-100"
+              >
+                ⬇️ 엑셀 다운로드
+              </button>
+            </div>
+          </div>
+
+          {/* 월별 테이블 */}
+          <table className="w-full border text-sm">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="p-2 border">월</th>
+                <th className="p-2 border">총매출</th>
+                <th className="p-2 border">방문객</th>
+                <th className="p-2 border">재방문</th>
+                <th className="p-2 border">객단가</th>
+                <th className="p-2 border">재방문율</th>
+                <th className="p-2 border">정액권비중</th>
+                <th className="p-2 border">고정비비율</th>
+                <th className="p-2 border">인건비비율</th>
+                <th className="p-2 border">재료비비율</th>
+                <th className="p-2 border">영업이익률</th>
+              </tr>
+            </thead>
+            <tbody>
+              {calcResult.months.map((m: any) => (
+                <tr key={m.month} className="text-center">
+                  <td className="border p-2">{m.month}</td>
+                  <td className="border p-2">{fmt(m.monthly_sales)}</td>
+                  <td className="border p-2">{m.visitors}</td>
+                  <td className="border p-2">{m.returning_visitors}</td>
+                  <td className="border p-2">
+                    {m.unit_sales ? fmt(Math.round(m.unit_sales)) : '-'}
+                  </td>
+                  <td className="border p-2">
+                    {m.revisit_rate ? m.revisit_rate.toFixed(1) + '%' : '-'}
+                  </td>
+                  <td className="border p-2">
+                    {m.pass_ratio ? m.pass_ratio.toFixed(1) + '%' : '-'}
+                  </td>
+                  <td className="border p-2">
+                    {m.fixed_ratio ? m.fixed_ratio.toFixed(1) + '%' : '-'}
+                  </td>
+                  <td className="border p-2">
+                    {m.labor_ratio ? m.labor_ratio.toFixed(1) + '%' : '-'}
+                  </td>
+                  <td className="border p-2">
+                    {m.material_ratio ? m.material_ratio.toFixed(1) + '%' : '-'}
+                  </td>
+                  <td className="border p-2">
+                    {m.op_margin_est ? m.op_margin_est.toFixed(1) + '%' : '-'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {/* 현금유보·부채 */}
+          <div className="text-sm text-gray-700 space-y-1">
+            <p>
+              💰 <b>현금유보비율:</b>{' '}
+              {calcResult.cash_buffer_ratio
+                ? calcResult.cash_buffer_ratio.toFixed(1)
+                : '-'}
+              % / <b>부채비율:</b>{' '}
+              {calcResult.debt_ratio
+                ? calcResult.debt_ratio.toFixed(1)
+                : '-'}
+              %
             </p>
-
-            {/* 급여 */}
-            {b.salaries.length > 0 && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm border border-gray-300">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="p-2 border">이름</th>
-                      <th className="p-2 border">직급</th>
-                      <th className="p-2 border text-right">급여</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {b.salaries.map((s, idx) => (
-                      <tr key={idx}>
-                        <td className="border p-2">{s.name}</td>
-                        <td className="border p-2">{s.rank}</td>
-                        <td className="border p-2 text-right">
-                          {s.total_amount.toLocaleString()}원
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* 매출/방문객/유입 */}
-            <div className="grid sm:grid-cols-3 gap-4">
-              <div className="p-3 border rounded bg-white">
-                <div className="text-gray-500 text-sm">총 매출</div>
-                <div className="font-semibold text-lg text-right">
-                  {(
-                    b.card_sales +
-                    b.pay_sales +
-                    b.cash_sales +
-                    b.account_sales
-                  ).toLocaleString()}
-                  원
-                </div>
-              </div>
-              <div className="p-3 border rounded bg-white">
-                <div className="text-gray-500 text-sm">방문객 / 리뷰</div>
-                <div className="font-semibold text-lg text-right">
-                  {b.visitors}명 / {b.reviews}건
-                </div>
-              </div>
-              <div className="p-3 border rounded bg-white">
-                <div className="text-gray-500 text-sm">💰 사업자 유입</div>
-                <div className="font-semibold text-lg text-right">
-                  {b.bank_inflow?.toLocaleString()}원
-                </div>
-              </div>
-            </div>
-
-            {/* 정액권 */}
-            <div className="grid sm:grid-cols-3 gap-4">
-              <div className="p-3 border rounded bg-white">
-                <div className="text-gray-500 text-sm">정액권 결제</div>
-                <div className="text-right font-semibold">
-                  {b.pass_paid?.toLocaleString()}원
-                </div>
-              </div>
-              <div className="p-3 border rounded bg-white">
-                <div className="text-gray-500 text-sm">정액권 차감</div>
-                <div className="text-right font-semibold">
-                  {b.pass_used?.toLocaleString()}원
-                </div>
-              </div>
-              <div className="p-3 border rounded bg-white">
-                <div className="text-gray-500 text-sm">정액권 잔액</div>
-                <div className="text-right font-semibold">
-                  {b.pass_balance?.toLocaleString()}원
-                </div>
-              </div>
-            </div>
-
-            {/* 지출 */}
-            <div className="grid sm:grid-cols-4 gap-4 text-sm">
-              <div className="p-3 border rounded bg-white">
-                <div className="text-gray-500">고정지출</div>
-                <div className="font-semibold text-right">
-                  {b.fixed_expense?.toLocaleString()}원
-                </div>
-              </div>
-              <div className="p-3 border rounded bg-white">
-                <div className="text-gray-500">변동지출</div>
-                <div className="font-semibold text-right">
-                  {b.variable_expense?.toLocaleString()}원
-                </div>
-              </div>
-              <div className="p-3 border rounded bg-white">
-                <div className="text-gray-500">사업자 배당</div>
-                <div className="font-semibold text-right text-amber-600">
-                  {b.owner_dividend?.toLocaleString() || 0}원
-                </div>
-              </div>
-              <div className="p-3 border rounded bg-white">
-                <div className="text-gray-500">월 지출합계</div>
-                <div className="font-semibold text-right">
-                  {(b.fixed_expense + b.variable_expense + (b.owner_dividend || 0)).toLocaleString()}
-                  원
-                </div>
-              </div>
-            </div>
+            <p>
+              🏦 3개월 필요 현금:{' '}
+              {fmt(calcResult.need_3m_cash)}원
+            </p>
           </div>
-        )}
-      </section>
-    ))}
 
-    {/* 전체 요약 */}
-    <section className="border rounded-lg p-4 bg-gray-50 space-y-4">
-      <h2 className="font-semibold text-lg">🏦 사업자 통장 / 지출 요약 (기간 전체)</h2>
-
-      <div className="grid sm:grid-cols-2 gap-4">
-        <div>
-          <label className="text-sm block">사업자 유입 총액</label>
-          <input
-            readOnly
-            value={totalBankInflow.toLocaleString()}
-            className="border rounded px-3 py-2 w-full bg-gray-100"
-          />
-        </div>
-        <div>
-          <label className="text-sm block">사업자 통장 현재 잔액</label>
-          <input
-            readOnly
-            value={cashBalance.toLocaleString()}
-            className="border rounded px-3 py-2 w-full bg-gray-100"
-          />
-        </div>
-      </div>
-
-      <div className="grid sm:grid-cols-4 gap-4 text-sm">
-        <div className="p-3 border rounded bg-white">
-          <div className="text-gray-500">총 고정지출 합계</div>
-          <div className="font-semibold text-right">{totalFixedExpense.toLocaleString()}원</div>
-        </div>
-        <div className="p-3 border rounded bg-white">
-          <div className="text-gray-500">총 변동지출 합계</div>
-          <div className="font-semibold text-right">{totalVariableExpense.toLocaleString()}원</div>
-        </div>
-        <div className="p-3 border rounded bg-white">
-          <div className="text-gray-500 text-amber-600">총 사업자배당 합계</div>
-          <div className="font-semibold text-right text-amber-600">
-            {totalOwnerDividend.toLocaleString()}원
+          {/* GPT 분석 버튼 */}
+          <div className="flex justify-end">
+            <button
+              onClick={runGPT}
+              disabled={loadingGpt}
+              className="bg-blue-600 text-white rounded px-4 py-2 hover:opacity-80"
+            >
+              {loadingGpt ? 'GPT 분석 중...' : '🤖 GPT 진단 리포트 생성'}
+            </button>
           </div>
-        </div>
-        <div className="p-3 border rounded bg-white">
-          <div className="text-gray-500">총 지출 합계</div>
-          <div className="font-semibold text-right">
-            {(totalExpense + totalOwnerDividend).toLocaleString()}원
-          </div>
-        </div>
-      </div>
+        </section>
+      )}
 
-      <div className="p-3 border rounded bg-white">
-        <div className="text-gray-500">정액권 결제총액</div>
-        <div className="font-semibold text-right">{totalPassPaid.toLocaleString()}원</div>
-      </div>
-      <div className="p-3 border rounded bg-white">
-        <div className="text-gray-500">정액권 차감총액</div>
-        <div className="font-semibold text-right">{totalPassUsed.toLocaleString()}원</div>
-      </div>
-      <div className="p-3 border rounded bg-white">
-        <div className="text-gray-500">정액권 잔액</div>
-        <div className="font-semibold text-right">{totalPassBalance.toLocaleString()}원</div>
-      </div>
-    </section>
-
-    {/* ───────── GPT 분석 버튼 ───────── */}
-    <button
-      onClick={handleAnalyze}
-      disabled={analyzing || monthBlocks.length === 0}
-      className="w-full bg-black text-white py-3 rounded-lg hover:opacity-80 disabled:opacity-40 mt-6"
-    >
-      {analyzing ? 'GPT 분석 중...' : '🤖 GPT로 재무 분석 리포트 생성'}
-    </button>
-
-    {/* ───────── GPT 결과 출력 ───────── */}
-    {result && (
-      <section
-        ref={resultRef}
-        className="bg-white border rounded-lg shadow-sm p-6 space-y-3 mt-6"
-      >
-        <h2 className="text-lg font-semibold">{title || 'GPT 분석 결과'}</h2>
-        <pre className="whitespace-pre-wrap leading-relaxed text-gray-800">{result}</pre>
-        {analysisId && (
-          <p className="text-xs text-gray-400 text-right">저장됨 ID: {analysisId}</p>
-        )}
-      </section>
-    )}
-  </main>
-)
+      {/* === GPT 분석 결과 === */}
+      {gptResult && (
+        <section className="space-y-4 border-t pt-4">
+          <h2 className="text-xl font-semibold">📑 GPT 진단 결과</h2>
+          <article className="prose whitespace-pre-wrap text-sm leading-relaxed">
+            {gptResult.analysis}
+          </article>
+        </section>
+      )}
+    </main>
+  )
 }
