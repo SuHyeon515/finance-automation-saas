@@ -2030,7 +2030,7 @@ async def financial_diagnosis(
     # ===== 1) 월별 기본(매출/고객/정액권/근무일수) =====
     mres = (
         supabase.table("salon_monthly_data")
-        .select("month, card_sales, pay_sales, cash_sales, account_sales, visitors, returning_visitors, pass_paid, pass_used, pass_balance, work_days")
+        .select("month, card_sales, pay_sales, cash_sales, account_sales, visitors, returning_visitors, pass_paid, pass_used, pass_balance")
         .eq("user_id", user_id)
         .eq("branch", branch)
         .gte("month", start_month)
@@ -2433,7 +2433,7 @@ async def financial_diagnosis(
         print("✅ analyses 테이블 저장 완료")
     except Exception as e:
         print("⚠️ analyses 저장 실패:", e)
-        
+
     return {
         "branch": branch,
         "period": f"{start_month}~{end_month}",
