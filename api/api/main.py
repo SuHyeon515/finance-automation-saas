@@ -1992,419 +1992,459 @@ async def get_latest_balance(body: dict = Body(...), authorization: Optional[str
         print("⚠️ 통장 잔액 조회 실패:", e)
         raise HTTPException(status_code=500, detail=str(e))
     
-# === 💈 제이가빈 회계 자동분석 리포트 (V5.1 — 실데이터 자동반영판) ===
-@app.post("/gpt/salon-analysis")
-async def salon_analysis(
+# === 💇‍♀️ 재무건전성 진단 (A~E) — 기간 집계 + 월별 계산 + GPT 서식 출력 ===
+@app.post("/gpt/financial-diagnosis")
+async def financial_diagnosis(
     body: dict = Body(...),
     authorization: Optional[str] = Header(None),
 ):
     """
-    💈 제이가빈 회계 자동분석 리포트 (V5.1 — 실데이터 자동반영판)
-    - 수수료율: (입력된 매출 - 카테고리 매출) / 입력된 매출 × 100
-    - 카드/페이 각각 계산 후 가중 평균
+    입력: { "branch": "동탄역점", "start_month": "YYYY-MM", "end_month": "YYYY-MM" }
+    로직:
+      1) salon_monthly_data: 매출/고객/정액권, 근무일수 등
+      2) transactions: 카테고리별 비용(고정/변동), 마케팅, 세금, 사업자배당
+      3) designer_salaries: 인건비
+      4) assets_log: 유동/부동 자산(보증금, 사업자통장 잔액 자동등록 로그)
+      5) 월별 지표 → 평가(좋음/보통/위험) → 점수화 → 등급(A~E)
+      6) GPT에 표/수치 던져서 “진단표” 작성
     """
     if not openai_client:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY 미설정")
 
-    # === 기본 정보 ===
+    # --- 입력/유저
     user_id = await get_user_id(authorization)
-    branch = body.get("branch")
+    branch = (body.get("branch") or "").strip()
     start_month = body.get("start_month")
     end_month = body.get("end_month")
-
     if not all([branch, start_month, end_month]):
         raise HTTPException(status_code=400, detail="branch, start_month, end_month 필수")
 
-    print(f"💈 [SalonAnalysis] branch={branch}, 기간={start_month}~{end_month}")
+    print(f"🔎 [financial-diagnosis] {branch} {start_month}~{end_month}")
 
-    # === 실제 DB에서 데이터 불러오기 ===
-    # 1️⃣ 입력 매출 (사용자 직접 입력값)
-    # ✅ 병합: 이제 하나의 테이블만 사용
-    months = (
+    # 유틸
+    def month_last_day(ym: str) -> str:
+        y, m = map(int, ym.split("-"))
+        last = monthrange(y, m)[1]
+        return f"{ym}-{last:02d}"
+
+    # ===== 1) 월별 기본(매출/고객/정액권/근무일수) =====
+    mres = (
         supabase.table("salon_monthly_data")
-        .select("month, card_sales, pay_sales, cash_sales, account_sales, pass_paid, pass_used, fixed_expense, variable_expense")
+        .select("month, card_sales, pay_sales, cash_sales, account_sales, visitors, returning_visitors, pass_paid, pass_used, pass_balance, work_days")
         .eq("user_id", user_id)
         .eq("branch", branch)
         .gte("month", start_month)
         .lte("month", end_month)
+        .order("month", desc=False)
         .execute()
-        .data or []
     )
+    mrows = mres.data or []
+    if not mrows:
+        raise HTTPException(status_code=404, detail="선택 기간의 salon_monthly_data 없음")
 
-    # 2️⃣ 카테고리 매출 (salon_monthly_data)
-    category_sales = (
-        supabase.table("salon_monthly_data")
-        .select("month, card_sales, pay_sales, cash_sales, account_sales, pass_paid, pass_used")
-        .eq("user_id", user_id)
-        .eq("branch", branch)
-        .gte("month", start_month)
-        .lte("month", end_month)
-        .execute()
-        .data or []
-    )
+    # YYYY-MM -> 정렬 보장
+    months = sorted([r["month"] for r in mrows])
 
-    # 3️⃣ 지출 및 기타 데이터 (transactions summary)
-    # transactions 테이블은 month가 없으므로 tx_date 기준으로 조회 + pandas로 월 계산
-    res_exp = (
+    # 빠른 참조용 dict
+    md = {r["month"]: r for r in mrows}
+
+    # ===== 2) 비용/수익 트랜잭션 집계 =====
+    #  (우리는 카테고리 이름을 정확히 사용: 스크린샷 기준)
+    date_from = f"{start_month}-01"
+    date_to = month_last_day(end_month)
+
+    tres = (
         supabase.table("transactions")
-        .select("tx_date, amount, is_fixed, category")
+        .select("tx_date, category, amount, is_fixed")
         .eq("user_id", user_id)
         .eq("branch", branch)
-        .gte("tx_date", f"{start_month}-01")
-        .lte("tx_date", pd.Period(end_month).end_time.strftime("%Y-%m-%d"))
+        .gte("tx_date", date_from)
+        .lte("tx_date", date_to)
         .execute()
     )
-
-    df_tx = pd.DataFrame(res_exp.data or [])
-    if not df_tx.empty:
-        df_tx["month"] = pd.to_datetime(df_tx["tx_date"]).dt.strftime("%Y-%m")
-        df_tx["amount"] = pd.to_numeric(df_tx["amount"], errors="coerce").fillna(0)
-        df_tx["is_fixed"] = df_tx["is_fixed"].fillna(False)
-
-        expense_data = (
-            df_tx.groupby("month")
-            .apply(lambda x: pd.Series({
-                "fixed_expense": abs(x.loc[(x["is_fixed"] == True) & (x["amount"] < 0), "amount"].sum()),
-                "variable_expense": abs(x.loc[(x["is_fixed"] == False) & (x["amount"] < 0), "amount"].sum()),
-                "owner_dividend": abs(x.loc[(x["category"] == "사업자배당") & (x["amount"] < 0), "amount"].sum()),
-            }))
-            .reset_index()
-            .to_dict(orient="records")
-        )
+    tx = tres.data or []
+    tx_df = pd.DataFrame(tx) if tx else pd.DataFrame(columns=["tx_date","category","amount","is_fixed"])
+    if not tx_df.empty:
+        tx_df["tx_date"] = pd.to_datetime(tx_df["tx_date"], errors="coerce")
+        tx_df["month"] = tx_df["tx_date"].dt.strftime("%Y-%m")
+        tx_df["amount"] = pd.to_numeric(tx_df["amount"], errors="coerce").fillna(0.0)
+        tx_df["category"] = tx_df["category"].fillna("")
+        tx_df["is_fixed"] = tx_df.get("is_fixed", False).fillna(False)
     else:
-        expense_data = []
+        tx_df["month"] = []
 
-    # === 데이터 병합 (월 기준 join)
-    df_input = pd.DataFrame(months) 
-    df_cat = pd.DataFrame(category_sales)
-    df_exp = pd.DataFrame(expense_data)
+    # ---- 카테고리 매핑(필요치만 정확히 집계) ----
+    FIXED_SET = set(["월세","렌탈료","관리비","통신료","청소업체","핸드비용"])
+    # 인건비는 별도로 designer_salaries + 일부 트랜잭션 카테고리 포함
+    LABOR_TX_SET = set(["디자이너월급","인턴월급","바이저월급","직원지원비","4대보험"])
+    MATERIAL_CAT = "헤어재료비"
+    MARKETING_CAT = "마케팅비"
+    TAX_CAT = "세금"
+    OWNER_DIVIDEND = "사업자배당"
 
-    months_df = (
-        df_cat.merge(df_input, on="month", how="outer", suffixes=("", "_input"))
-            .merge(df_exp, on="month", how="outer")
-            .fillna(0)
-    )
-
-    months = months_df.to_dict(orient="records")
-
-    print(f"📦 병합된 월 데이터 {len(months)}건")
-    for m in months:
-        print(f"  └─ {m['month']} 카드:{m.get('card_sales',0):,.0f} 페이:{m.get('pay_sales',0):,.0f}")
-
-    # === Helpers ===
-    def clamp_percent(x: float) -> float:
-        """퍼센트 값 0~100 사이로 보정"""
-        if x is None or np.isnan(x):
+    # 월별 합계용 도우미
+    def sum_tx(month, cond):
+        if tx_df.empty:
             return 0.0
-        return max(0.0, min(100.0, float(x)))
+        sub = tx_df[tx_df["month"].eq(month)]
+        if sub.empty:
+            return 0.0
+        sub = sub[cond(sub)]
+        return float(sub["amount"].sum())
 
-    # === 급여 (인건비) 조회 ===
-    def fetch_payroll(branch_name, month):
+    # ===== 3) 인건비(디자이너 급여) =====
+    sres = (
+        supabase.table("designer_salaries")
+        .select("month, total_amount")
+        .eq("user_id", user_id)
+        .eq("branch", branch)
+        .gte("month", start_month)
+        .lte("month", end_month)
+        .execute()
+    )
+    sal = sres.data or []
+    sdf = pd.DataFrame(sal) if sal else pd.DataFrame(columns=["month","total_amount"])
+    if not sdf.empty:
+        sdf["total_amount"] = pd.to_numeric(sdf["total_amount"], errors="coerce").fillna(0.0)
+
+    def labor_amount(month: str) -> float:
+        # designer_salaries
+        a = 0.0
+        if not sdf.empty:
+            a += float(sdf.loc[sdf["month"].eq(month), "total_amount"].sum())
+        # 트랜잭션 쪽(급여 관련 카테고리) — 음수로 들어갔다면 합계는 음수.
+        b = sum_tx(month, lambda t: t["category"].isin(list(LABOR_TX_SET)))
+        return float(a + b)
+
+    # ===== 4) 자산(현금·예금 / 부동자산) =====
+    # - 자동등록된 ‘월말 잔액’ 로그가 있으면 그걸 스냅샷으로 사용
+    # - 없으면 transactions 최신 balance로 대체하는 함수 재사용
+    def latest_bank_balance(end_ym: str) -> Optional[float]:
+        try:
+            # assets_log에서 "잔액 기준 자동등록" 최신 1건
+            a = (
+                supabase.table("assets_log")
+                .select("amount, created_at, memo, category")
+                .eq("user_id", user_id)
+                .eq("branch", branch)
+                .ilike("memo", "%잔액 기준 자동등록%")
+                .lte("created_at", month_last_day(end_ym))
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            ).data or []
+            if a:
+                return float(a[0].get("amount") or 0.0)
+        except Exception as e:
+            print("⚠️ assets_log 잔액 조회 실패:", e)
+        # fallback: transactions 최신 balance
         try:
             res = (
-                supabase.table("designer_salaries")
-                .select("total_amount")
+                supabase.table("transactions")
+                .select("balance, tx_date")
                 .eq("user_id", user_id)
-                .eq("branch", branch_name)
-                .eq("month", month)
+                .eq("branch", branch)
+                .lte("tx_date", month_last_day(end_ym))
+                .order("tx_date", desc=True)
+                .limit(1)
                 .execute()
-            )
-            if res.data:
-                return sum(float(r.get("total_amount", 0) or 0) for r in res.data)
+            ).data or []
+            if res:
+                return float(res[0].get("balance") or 0.0)
         except Exception as e:
-            print(f"⚠️ 급여 조회 실패({branch_name}-{month}):", e)
-        return 0.0
+            print("⚠️ transactions 최신 balance 조회 실패:", e)
+        return None
 
-    running_pass_balance = 0.0
-    monthly_results = []
+    def latest_fixed_deposit(end_ym: str) -> Optional[float]:
+        # 보증금(부동자산) 최근 금액(사용자가 자산 로그로 기록했다고 가정)
+        try:
+            res = (
+                supabase.table("assets_log")
+                .select("amount, created_at, category, memo")
+                .eq("user_id", user_id)
+                .eq("branch", branch)
+                .ilike("category", "%보증금%")
+                .lte("created_at", month_last_day(end_ym))
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            ).data or []
+            if res:
+                return float(res[0].get("amount") or 0.0)
+        except Exception as e:
+            print("⚠️ 보증금 조회 실패:", e)
+        return None
 
-    # === 월별 계산 ===
-    for m in months:
-        month = m.get("month", "YYYY-MM")
+    # ===== 5) 월별 계산 =====
+    results = []
+    for ym in months:
+        base = md.get(ym, {})
+        card = float(base.get("card_sales", 0) or 0)
+        pay = float(base.get("pay_sales", 0) or 0)
+        cash = float(base.get("cash_sales", 0) or 0)
+        acct = float(base.get("account_sales", 0) or 0)
+        monthly_sales = card + pay + cash + acct
 
-        # === 매출 ===
-        card_sales = float(m.get("card_sales", 0) or 0)
-        pay_sales = float(m.get("pay_sales", 0) or 0)
-        cash_sales = float(m.get("cash_sales", 0) or 0)
-        account_sales = float(m.get("account_sales", 0) or 0)
-        total_sales = card_sales + pay_sales + cash_sales + account_sales
+        visitors = int(base.get("visitors", 0) or 0)
+        returning = int(base.get("returning_visitors", 0) or 0)
+        pass_paid = float(base.get("pass_paid", 0) or 0)
+        pass_used = float(base.get("pass_used", 0) or 0)
+        pass_bal = float(base.get("pass_balance", pass_paid - pass_used) or (pass_paid - pass_used))
+        work_days = int(base.get("work_days", 0) or 0)
 
-        # === 정액권 ===
-        pass_paid = float(m.get("pass_paid", 0) or 0)
-        pass_used = float(m.get("pass_used", 0) or 0)
+        # 고정비 (월세/렌탈/관리비/통신/청소/핸드비용 등)
+        fixed_other = sum_tx(ym, lambda t: t["category"].isin(list(FIXED_SET)))
+        # 인건비(급여/4대보험 + designer_salaries)
+        labor = labor_amount(ym)
+        # 합친 고정비
+        fixed_total = float(fixed_other + labor)
 
-        # === 은행 입출금 ===
-        bank_inflow = float(m.get("bank_inflow", 0) or 0)
-        bank_outflow = float(m.get("bank_outflow", 0) or 0)
+        # 재료비/마케팅/세금/사업자배당
+        materials = sum_tx(ym, lambda t: t["category"].eq(MATERIAL_CAT))
+        marketing = sum_tx(ym, lambda t: t["category"].eq(MARKETING_CAT))
+        tax_amt = sum_tx(ym, lambda t: t["category"].eq(TAX_CAT))
+        owner_div = sum_tx(ym, lambda t: t["category"].eq(OWNER_DIVIDEND))
 
-        # === 지출 및 인건비 ===
-        fixed_exp = float(m.get("fixed_expense", 0) or 0)
-        var_exp = float(m.get("variable_expense", 0) or 0)
-        owner_dividend = float(m.get("owner_dividend", 0) or 0)
-        labor_cost = float(m.get("labor_cost", 0) or 0)
-        if labor_cost == 0:
-            labor_cost = fetch_payroll(branch, month)
+        # 비율 계산 (0 division 방지)
+        def pct(a, b):
+            return float(a / b * 100.0) if b and b != 0 else None
 
-        # === 실현매출 ===
-        realized_sales = (total_sales - pass_paid) + pass_used
+        unit_sales = float(monthly_sales / visitors) if visitors else None
+        revisit_rate = pct(returning, visitors)
+        pass_ratio = pct(pass_paid, monthly_sales)
 
-        # === 현금흐름 ===
-        bank_outflow = float(m.get("bank_outflow", 0) or 0)
-        if bank_outflow == 0:
-            # 급여(labor_cost)는 이미 거래에서 음수로 반영되어 있을 가능성이 높으므로
-            # (summary에 포함되어 있다면) 중복 방지 위해 제외하는 게 안전
-            bank_outflow = fixed_exp + var_exp + owner_dividend
+        fixed_ratio = pct(abs(fixed_total), monthly_sales)
+        labor_ratio = pct(abs(labor), monthly_sales)
+        material_ratio = pct(abs(materials), monthly_sales)
+        mkt_ratio = pct(abs(marketing), monthly_sales)
 
-        # === 정액권 잔액 관리 ===
-        running_pass_balance += pass_paid - pass_used
-        pass_balance = max(running_pass_balance, 0.0)
+        # 단순 영업이익/율
+        op_profit_est = monthly_sales - (abs(fixed_total) + abs(materials) + abs(marketing))
+        op_margin_est = pct(op_profit_est, monthly_sales)
 
-        # === ✅ 수수료율 계산 (입력 vs 카테고리 기준) ===
-        input_card_sales = float(m.get("input_card_sales", card_sales) or 0)
-        input_pay_sales = float(m.get("input_pay_sales", pay_sales) or 0)
-        # category_* 값이 없으면 card_sales/pay_sales 로 fallback
-        category_card_sales = float(
-            m.get("category_card_sales", m.get("card_sales", 0)) or 0
-        )
-        category_pay_sales = float(
-            m.get("category_pay_sales", m.get("pay_sales", 0)) or 0
-        )
+        # 현금/자산/부채 스냅샷(기간의 마지막 달 기준에서만 의미있음)
+        # 월별 결과에도 같이 넣어두고, 최종 요약은 end_month로 산출
+        cash_hold = latest_bank_balance(ym)
+        fixed_deposit = latest_fixed_deposit(ym)
+        total_assets = None
+        if cash_hold is not None and fixed_deposit is not None:
+            total_assets = cash_hold + fixed_deposit
+        elif cash_hold is not None:
+            total_assets = cash_hold
 
-        card_commission_rate = (
-            ((input_card_sales - category_card_sales) / input_card_sales) * 100
-            if input_card_sales > 0 else 0
-        )
-        pay_commission_rate = (
-            ((input_pay_sales - category_pay_sales) / input_pay_sales) * 100
-            if input_pay_sales > 0 else 0
-        )
+        total_debt = pass_bal  # 부채 = 정액권 잔액
 
-        total_input_sales = input_card_sales + input_pay_sales
-        if total_input_sales > 0:
-            commission_rate = (
-                (input_card_sales * card_commission_rate + input_pay_sales * pay_commission_rate)
-                / total_input_sales
-            )
-        else:
-            commission_rate = 0.0
+        # 평가(좋음/보통/위험)
+        def eval3(val, rule):
+            if val is None:
+                return "데이터 부족"
+            lo = rule["lo"]; mid = rule["mid"]; hi = rule["hi"]; mode = rule["mode"]
+            # mode: 'higher_better' or 'range' or 'lower_better'
+            if mode == "higher_better":
+                return "좋음" if val >= hi else ("보통" if val >= mid else "위험")
+            if mode == "lower_better":
+                return "좋음" if val <= lo else ("보통" if val <= mid else "위험")
+            # range
+            return "좋음" if (lo <= val <= hi) else ("보통" if (min(lo,hi) - 10 <= val <= max(lo,hi) + 10) else "위험")  # 범용
 
-        commission_rate = clamp_percent(commission_rate)
+        # 기준표 매핑
+        eval_map = {
+            "재방문율":     lambda: eval3(revisit_rate, dict(lo=70, mid=50, hi=70, mode="higher_better")),
+            "정액권비중":   lambda: ("좋음" if pass_ratio is not None and 20 <= pass_ratio <= 30 else ("보통" if pass_ratio is not None and 30 < pass_ratio <= 40 else ("위험" if pass_ratio is not None and pass_ratio > 40 else "데이터 부족"))),
+            "고정비비율":   lambda: eval3(fixed_ratio, dict(lo=60, mid=75, hi=60, mode="lower_better")),
+            "인건비비율":   lambda: ("좋음" if labor_ratio is not None and 35 <= labor_ratio <= 45 else ("보통" if labor_ratio is not None and 45 < labor_ratio < 50 else ("위험" if labor_ratio is not None and labor_ratio >= 50 else "데이터 부족"))),
+            "재료비비율":   lambda: ("좋음" if material_ratio is not None and 10 <= material_ratio <= 15 else ("보통" if material_ratio is not None and 15 < material_ratio < 20 else ("위험" if material_ratio is not None and material_ratio >= 20 else "데이터 부족"))),
+            "영업이익률":   lambda: ("좋음" if op_margin_est is not None and op_margin_est >= 10 else ("보통" if op_margin_est is not None and 5 <= op_margin_est < 10 else ("위험" if op_margin_est is not None and op_margin_est < 5 else "데이터 부족"))),
+            "고객회전율":   lambda: ("좋음" if (visitors and work_days and visitors/work_days >= 8) else ("보통" if (visitors and work_days and 5 <= visitors/work_days < 8) else ("위험" if (visitors and work_days and visitors/work_days < 5) else "데이터 부족"))),
+        }
 
-        print(
-            f"[{branch}] {month} ▶ 입력카드 {input_card_sales:,.0f}, 카테고리카드 {category_card_sales:,.0f}, "
-            f"입력페이 {input_pay_sales:,.0f}, 카테고리페이 {category_pay_sales:,.0f} → 수수료율 {commission_rate:.2f}%"
-        )
+        # 점수화(좋음2/보통1/위험0/부족=무시)
+        def score(x):
+            return {"좋음":2,"보통":1,"위험":0}.get(x, None)
 
-        # === 비율 계산 ===
-        redemption_rate = (
-            clamp_percent((pass_used / pass_paid) * 100.0) if pass_paid > 0 else 0.0
-        )
-        labor_rate = (
-            (labor_cost / realized_sales * 100.0) if realized_sales > 0 else 0.0
-        )
+        evals = {k: f() for k, f in eval_map.items()}
+        scores = [s for s in map(score, evals.values()) if s is not None]
+        avg_score = float(np.mean(scores)) if scores else 0.0
+        # 등급(ⅠⅧ 점수화 로직)
+        if   avg_score >= 1.8: grade = "A"
+        elif avg_score >= 1.4: grade = "B"
+        elif avg_score >= 1.0: grade = "C"
+        elif avg_score >= 0.6: grade = "D"
+        else:                  grade = "E"
 
-        # === 손익 계산 ===
-        net_profit = realized_sales - (fixed_exp + var_exp + labor_cost)
-        real_profit = net_profit + owner_dividend
-        real_profit_rate = (
-            (real_profit / realized_sales * 100.0) if realized_sales > 0 else 0.0
-        )
-        cash_flow = bank_inflow - bank_outflow
+        results.append(dict(
+            month=ym,
+            monthly_sales=monthly_sales,
+            visitors=visitors,
+            returning_visitors=returning,
+            unit_sales=unit_sales,
+            revisit_rate=revisit_rate,
+            pass_paid=pass_paid, pass_used=pass_used, pass_balance=pass_bal,
+            pass_ratio=pass_ratio,
+            fixed_other=fixed_other, labor=labor, fixed_total=fixed_total,
+            material=materials, marketing=marketing, tax=tax_amt, owner_dividend=owner_div,
+            fixed_ratio=fixed_ratio, labor_ratio=labor_ratio, material_ratio=material_ratio, mkt_ratio=mkt_ratio,
+            op_profit_est=op_profit_est, op_margin_est=op_margin_est,
+            work_days=work_days,
+            cash_hold=cash_hold, fixed_deposit=fixed_deposit, total_assets=total_assets, total_debt=total_debt,
+            evals=evals, avg_score=avg_score, grade=grade
+        ))
 
-        # === 월별 결과 저장 ===
-        monthly_results.append(
-            {
-                "month": month,
-                "total_sales": total_sales,
-                "card_sales": card_sales,
-                "pay_sales": pay_sales,
-                "cash_sales": cash_sales,
-                "account_sales": account_sales,
-                "pass_paid": pass_paid,
-                "pass_used": pass_used,
-                "fixed_exp": fixed_exp,
-                "var_exp": var_exp,
-                "labor_cost": labor_cost,
-                "owner_dividend": owner_dividend,
-                "bank_inflow": bank_inflow,
-                "bank_outflow": bank_outflow,
-                "realized_sales": realized_sales,
-                "pass_balance": pass_balance,
-                "redemption_rate": redemption_rate,
-                "commission_rate": commission_rate,
-                "labor_rate": labor_rate,
-                "net_profit": net_profit,
-                "real_profit": real_profit,
-                "real_profit_rate": real_profit_rate,
-                "cash_flow": cash_flow,
-            }
-        )
+    # ===== 6) 최종 요약(기간 마지막 달 기준의 현금/자산/부채/현금유보/부채비율) =====
+    last = results[-1]
+    # 3개월 필요현금 = 고정비(마지막달) × 3
+    need_3m_cash = abs(last["fixed_total"]) * 3.0
+    cash_buffer_ratio = float((last["cash_hold"] / need_3m_cash * 100.0)) if (last["cash_hold"] is not None and need_3m_cash) else None
+    debt_ratio = float((last["total_debt"] / last["total_assets"] * 100.0)) if (last["total_assets"] not in [None,0] and last["total_debt"] is not None) else None
 
-    # === 평균 계산 ===
-    avg = lambda k: np.mean([m[k] for m in monthly_results]) if monthly_results else 0.0
-    averages = {k: avg(k) for k in [
-        "realized_sales", "net_profit", "real_profit", "real_profit_rate",
-        "commission_rate", "labor_rate", "redemption_rate", "cash_flow"
-    ]}
+    # 현금유보/부채 평가
+    def eval_cash(x):
+        if x is None: return "데이터 부족"
+        return "좋음" if x >= 100 else ("보통" if 50 <= x < 100 else "위험")
+    def eval_debt(x):
+        if x is None: return "데이터 부족"
+        return "좋음" if x < 100 else ("보통" if 100 <= x < 200 else "위험")
 
-    # === 표 텍스트 구성 ===
-    table_text = "\n".join(
-        [
-            f"| {m['month']} | ₩{m['total_sales']:,.0f} | ₩{m['realized_sales']:,.0f} | ₩{m['net_profit']:,.0f} | ₩{m['owner_dividend']:,.0f} | ₩{m['real_profit']:,.0f} | {m['real_profit_rate']:.1f}% | {m['commission_rate']:.1f}% | {m['labor_rate']:.1f}% | {m['redemption_rate']:.1f}% | ₩{m['cash_flow']:,.0f} |"
-            for m in monthly_results
+    cash_eval = eval_cash(cash_buffer_ratio)
+    debt_eval = eval_debt(debt_ratio)
+
+    # ===== 7) GPT 프롬프트 생성 (요구된 ‘표 형식’ 그대로) =====
+    # 테이블 본문(한 달씩 라인 만들기 위해 필요한 핵심 지표만)
+    def fmt_money(x): 
+        return f"₩{x:,.0f}" if x is not None else "데이터 부족"
+    def fmt_pct(x):
+        return f"{x:.1f}%" if x is not None else "데이터 부족"
+    def fmt_int(x):
+        return f"{int(x)}" if x is not None else "데이터 부족"
+
+    # 핵심 지표 행들(마지막 달 기준 필수 포함)
+    table_lines = []
+    for r in results:
+        # 구분: 매출 구조 / 비용 구조 / 현금·부채 / 수익성 / 운영 효율
+        table_lines += [
+            f"| 매출 구조 | 객단가 | {fmt_money(r['unit_sales'])} | - | {r['evals']['영업이익률'] if r['unit_sales'] is not None else '데이터 부족'} |",
+            f"| 매출 구조 | 재방문율 | {fmt_pct(r['revisit_rate'])} | ≥70% | {r['evals']['재방문율']} |",
+            f"| 매출 구조 | 정액권 매출비중 | {fmt_pct(r['pass_ratio'])} | 20~30% | {r['evals']['정액권비중']} |",
+            f"| 비용 구조 | 고정비 비율 | {fmt_pct(r['fixed_ratio'])} | ≤60% | {r['evals']['고정비비율']} |",
+            f"| 비용 구조 | 인건비 비율 | {fmt_pct(r['labor_ratio'])} | 35~45% | {r['evals']['인건비비율']} |",
+            f"| 비용 구조 | 재료비 비율 | {fmt_pct(r['material_ratio'])} | 10~15% | {r['evals']['재료비비율']} |",
+            f"| 수익성 | 영업이익률(추정) | {fmt_pct(r['op_margin_est'])} | ≥10% | {r['evals']['영업이익률']} |",
+            f"| 운영 효율 | 고객 회전율 | {fmt_int(r['visitors']/r['work_days'] if r['work_days'] else None)}명/일 | ≥8명/일 | {r['evals']['고객회전율']} |",
         ]
+        table_lines.append("|---|---|---|---|---|")  # 월 구분선 느낌 (시각 구분)
+
+    # 한줄 요약 텍스트 후보(마지막달 기준)
+    one_liner = (
+        "고정비와 인건비, 재료비, 마케팅비를 반영한 추정 영업이익률이 "
+        + (fmt_pct(last['op_margin_est']))
+        + " 수준입니다. "
+        + f"현금유보비율 {fmt_pct(cash_buffer_ratio)}, 부채비율 {fmt_pct(debt_ratio)}."
     )
 
-    start_month = months[0].get("month")
-    end_month = months[-1].get("month")
+    # 최종 등급은 기간 평균점수로 산출
+    avg_all = float(np.mean([r["avg_score"] for r in results])) if results else 0.0
+    if   avg_all >= 1.8: final_grade = "A"
+    elif avg_all >= 1.4: final_grade = "B"
+    elif avg_all >= 1.0: final_grade = "C"
+    elif avg_all >= 0.6: final_grade = "D"
+    else:                final_grade = "E"
 
-    avg_realized = averages["realized_sales"]
-    avg_net = averages["net_profit"]
-    avg_real = averages["real_profit"]
-    avg_real_rate = averages["real_profit_rate"]
-    avg_commission = averages["commission_rate"]
-    avg_labor = averages["labor_rate"]
-    avg_redemption = averages["redemption_rate"]
-    avg_cashflow = averages["cash_flow"]
+    # GPT에 전달할 “요약 수치 + 표”
+    gpt_prompt = f"""
+당신은 미용실 재무건전성 진단 전문가다.
+다음 데이터를 기반으로, 요구된 출력 형식에 맞춰 간결하고 직설적으로 작성하라.
 
-    # === GPT 프롬프트 (변경 없음) ===
-    prompt = f"""
-# === 💈 제이가빈 회계 자동분석 리포트 (V5.1 — 실데이터 자동반영판) ===
+[기본정보]
 지점명: {branch}
-분석기간: {start_month} ~ {end_month}
+기간: {start_month} ~ {end_month}
 
-[Ⅰ. 입력 요약]
-| 월 | 총매출 | 실현매출 | 회계순이익 | 사업자배당 | 실질순이익 | 수익률 | 수수료율 | 인건비율 | 소진률 | 현금흐름 |
-|----|-----------|-----------|-----------|-----------|-----------|-----------|-----------|-----------|-----------|-----------|
-{table_text}
+[핵심 요약 수치 (마지막 달 기준)]
+월매출: {fmt_money(last['monthly_sales'])}
+총객수: {fmt_int(last['visitors'])}명 / 재방문: {fmt_int(last['returning_visitors'])}명
+객단가: {fmt_money(last['unit_sales'])}
+정액권 결제액/차감액/잔액(부채): {fmt_money(last['pass_paid'])} / {fmt_money(last['pass_used'])} / {fmt_money(last['pass_balance'])}
+고정비(인건비 포함): {fmt_money(abs(last['fixed_total']))} (인건비 {fmt_money(abs(last['labor']))})
+재료비: {fmt_money(abs(last['material']))} / 마케팅비: {fmt_money(abs(last['marketing']))}
+영업이익(추정): {fmt_money(last['op_profit_est'])} / 영업이익률(추정): {fmt_pct(last['op_margin_est'])}
+보유현금·예금(추정): {fmt_money(last['cash_hold'])}
+총자산(추정): {fmt_money(last['total_assets'])} / 총부채(정액권잔액): {fmt_money(last['total_debt'])}
+3개월 필요 현금: {fmt_money(need_3m_cash)}
+현금유보비율: {fmt_pct(cash_buffer_ratio)} ({cash_eval})
+부채비율: {fmt_pct(debt_ratio)} ({debt_eval})
 
-──────────────────────────────
-[Ⅱ. 평균 요약]
-- 평균 실현매출: ₩{avg_realized:,.0f}
-- 평균 회계상 순이익: ₩{avg_net:,.0f}
-- 평균 실질 순이익(대표 기준): ₩{avg_real:,.0f} ({avg_real_rate:.1f}%)
-- 평균 수수료율: {avg_commission:.1f}%
-- 평균 인건비율: {avg_labor:.1f}%
-- 평균 정액권 소진률: {avg_redemption:.1f}%
-- 평균 현금흐름: ₩{avg_cashflow:,.0f}
+[표 — 구분/항목/수치/기준/평가]
+| 구분 | 항목 | 수치 | 기준/권장범위 | 평가(좋음/보통/위험) |
+|---|---|---|---|---|
+{chr(10).join(table_lines)}
 
-──────────────────────────────
-[Ⅲ. 분석 요청]
-1) 매출 및 수수료 효율 분석
-2) 정액권 회계 리스크
-3) 지출 구조 효율성
-4) 현금흐름 및 부채 리스크
-5) 대표 기준 실질 수익 해석
+[평가 기준]
+- 재방문율: 70% 이상 좋음 / 50~70% 보통 / 50% 미만 위험
+- 정액권 매출비중: 20~30% 적정 / 40% 이상 과다
+- 고정비 비율: 60% 이하 좋음 / 60~75% 보통 / 75% 이상 위험
+- 재료비 비율: 10~15% 권장 / 20% 이상 원가관리 필요
+- 인건비 비율: 35~45% 적정 / 50% 이상 과다
+- 현금유보비율: 100% 이상 안전 / 50~100% 보통 / 50% 미만 위험
+- 부채비율: 100% 미만 안정 / 100~200% 주의 / 200% 이상 고위험
+- 영업이익률: 10% 이상 좋음 / 5~10% 보통 / 5% 미만 위험
+- 고객 회전율: 8명/일 이상 안정 / 5~8명/일 보통 / 5명/일 미만 위험
 
-──────────────────────────────
-[Ⅳ. 출력 형식 예시]
-실현매출, 순이익, 수수료율, 인건비율, 소진률, 현금흐름, 대표 실질 수익을 모두 수치 기반으로 평가하여
-“회계상 손익과 대표 실수익을 함께 보는 보고서”를 작성하십시오.
+[출력 형식]
+1. 한줄 요약
+2. 핵심 지표 테이블 (위 표 그대로)
+3. 재무건전성 등급
+   - 등급: A/B/C/D/E 중 하나 (기간 평균점수 기반, 현재 계산값: {final_grade})
+   - 이유: 2~3줄로 숫자 포함
+4. 개선 액션 제안 (최대 5개, 한 줄씩. 무엇을/얼마나/언제까지)
+
+한줄 요약으로는 다음 문장을 참고하되 과장 없이 간단히 정리하라:
+- "{one_liner}"
 """
 
-    # === GPT 호출 ===
     try:
-        resp = openai_client.chat.completions.create(
+        gpt = openai_client.chat.completions.create(
             model="gpt-4o",
-            temperature=0.25,
-            max_tokens=2800,
+            temperature=0.2,
+            max_tokens=2200,
             messages=[
-                {"role": "system", "content": "당신은 미용실 전문 회계 분석가입니다. 수치에 근거한 재무 리포트를 작성하십시오. 추측 금지."},
-                {"role": "user", "content": prompt},
+                {"role": "system", "content": "너는 미용실 재무건전성 진단 전문가다. 수치 기반으로 간결하고 직설적으로 작성하라. 데이터 부족은 명확히 표시하라."},
+                {"role": "user", "content": gpt_prompt},
             ],
             timeout=120,
         )
-        gpt_text = resp.choices[0].message.content
+        analysis_text = gpt.choices[0].message.content
     except Exception as e:
-        print("⚠️ GPT 분석 실패:", e)
-        raise HTTPException(status_code=500, detail=f"GPT 분석 실패: {e}")
+        print("⚠️ GPT 실패:", e)
+        analysis_text = "[알림] GPT 출력 생성에 실패했습니다. 계산 결과(JSON)를 참고하세요."
 
-    # === 💾 결과 저장 (로컬 JSON) ===
+    # ✅ GPT 분석 결과 저장 (analyses 테이블)
     try:
-        title = f"{branch} ({start_month}~{end_month}) 실질 손익 리포트"
-        filename = f"{branch}_{start_month}_{end_month}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-
-        BASE_DIR = os.getcwd()  # Render/Vercel 환경 호환
-        REPORT_DIR = os.path.join(BASE_DIR, "data", "reports")
-        os.makedirs(REPORT_DIR, exist_ok=True)
-        file_path = os.path.join(REPORT_DIR, filename)
-
-        save_data = {
-            "branch": branch,
-            "period": f"{start_month}~{end_month}",
-            "created_at": datetime.now().isoformat(),
+        supabase.table("analyses").insert({
             "user_id": user_id,
-            "title": title,
-            "analysis": gpt_text,
-            "months": monthly_results,
-            "averages": {
-                "realized_sales": avg_realized,
-                "net_profit": avg_net,
-                "real_profit": avg_real,
-                "real_profit_rate": avg_real_rate,
-                "commission_rate": avg_commission,
-                "labor_rate": avg_labor,
-                "redemption_rate": avg_redemption,
-                "cash_flow": avg_cashflow,
-            },
-        }
-
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(save_data, f, ensure_ascii=False, indent=2)
-
-        print(f"✅ 분석결과 로컬 저장 완료: {file_path}")
+            "branch": branch,
+            "title": f"{branch} 재무건전성 진단 ({start_month}~{end_month})",
+            "content": analysis_text,
+            "grade": final_grade,
+            "cash_buffer_ratio": cash_buffer_ratio,
+            "debt_ratio": debt_ratio,
+            "period_start": start_month,
+            "period_end": end_month,
+            "created_at": datetime.now().isoformat()
+        }).execute()
+        print("✅ analyses 테이블 저장 완료")
     except Exception as e:
-        print(f"⚠️ 로컬 파일 저장 실패: {e}")
-
-    # === ☁️ Supabase 저장 (created_at 포함 + 오류 감지) ===
-    try:
-        insert_res = (
-            supabase.table("analyses")
-            .insert({
-                "user_id": user_id,
-                "branch": branch,
-                "title": title,
-                "content": gpt_text,  # ← 스키마에 content 컬럼 있어야 함
-                "created_at": datetime.now().isoformat()
-            })
-            .execute()
-        )
-
-        print("📄 Supabase 응답:", insert_res)
-
-        res_data = getattr(insert_res, "data", None)
-        res_err  = getattr(insert_res, "error", None)
-        if not res_data:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Supabase 저장 실패: {res_err or 'data 비어있음'}"
-            )
-
-        print(f"✅ Supabase 저장 완료: {res_data}")
-    except HTTPException:
-        # 위에서 이미 상세 메시지로 래이즈했으므로 그대로 전파
-        raise
-    except Exception as e:
-        print(f"❌ Supabase 저장 실패: {e}")
-        raise HTTPException(status_code=500, detail=f"Supabase 저장 실패: {e}")
-
-    # === 결과 반환 ===
+        print("⚠️ analyses 저장 실패:", e)
+        
     return {
         "branch": branch,
         "period": f"{start_month}~{end_month}",
-        "analysis": gpt_text,
-        "months": monthly_results,
-        "averages": {
-            "realized_sales": avg_realized,
-            "net_profit": avg_net,
-            "real_profit": avg_real,
-            "real_profit_rate": avg_real_rate,
-            "commission_rate": avg_commission,
-            "labor_rate": avg_labor,
-            "redemption_rate": avg_redemption,
-            "cash_flow": avg_cashflow,
-        },
+        "grade": final_grade,
+        "cash_buffer_ratio": cash_buffer_ratio,
+        "debt_ratio": debt_ratio,
+        "need_3m_cash": need_3m_cash,
+        "months": results,           # 월별 상세 지표
+        "analysis": analysis_text,   # GPT 진단표
     }
+
 
 # ✅ 사업자 유입총액 계산 API (내수금, 기타수입 제외)
 @app.post('/transactions/income-filtered')
