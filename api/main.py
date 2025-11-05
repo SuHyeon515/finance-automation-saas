@@ -2193,12 +2193,10 @@ async def financial_diagnosis(
         pass_bal = float(base.get("pass_balance", pass_paid - pass_used) or (pass_paid - pass_used))
         work_days = int(base.get("work_days", 0) or 0)
 
-        # 고정비 (월세/렌탈/관리비/통신/청소/핸드비용 등)
+        # 수정 (✅ 인건비 분리)
         fixed_other = sum_tx(ym, lambda t: t["category"].isin(list(FIXED_SET)))
-        # 인건비(급여/4대보험 + designer_salaries)
         labor = labor_amount(ym)
-        # 합친 고정비
-        fixed_total = float(fixed_other + labor)
+        fixed_total = float(fixed_other)   # ✅ 인건비 제외
 
         # 재료비/마케팅/세금/사업자배당
         materials = sum_tx(ym, lambda t: t["category"].eq(MATERIAL_CAT))
@@ -2220,15 +2218,13 @@ async def financial_diagnosis(
         mkt_ratio = pct(abs(marketing), monthly_sales)
 
         # ✅ 영업이익 (사업자배당 제외)
-        # 총입금액 - 고정비 - 변동지출(재료비, 마케팅, 세금)
         op_profit_est = monthly_sales - (
-            abs(fixed_total) + abs(materials) + abs(marketing) + abs(tax_amt)
+            abs(fixed_other) + abs(labor) + abs(materials) + abs(marketing) + abs(tax_amt)
         )
 
         # ✅ 순이익 (사업자배당 포함)
-        # 총입금액 - (고정비 + 변동지출 + 사업자배당)
         net_profit_est = monthly_sales - (
-            abs(fixed_total) + abs(materials) + abs(marketing) + abs(tax_amt) + abs(owner_div)
+            abs(fixed_other) + abs(labor) + abs(materials) + abs(marketing) + abs(tax_amt) + abs(owner_div)
         )
 
         # ✅ 비율 계산
