@@ -2090,7 +2090,8 @@ async def financial_diagnosis(
         if sub.empty:
             return 0.0
         sub = sub[cond(sub)]
-        return float(sub["amount"].sum())
+        # ✅ 모든 지출을 절대값 기준으로 계산
+        return float(sub["amount"].abs().sum())
 
     # ===== 3) 인건비(디자이너 급여) =====
     sres = (
