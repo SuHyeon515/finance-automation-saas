@@ -2195,7 +2195,10 @@ async def financial_diagnosis(
 
         # 수정 (✅ 인건비 분리)
         fixed_other = sum_tx(ym, lambda t: t["category"].isin(list(FIXED_SET)))
-        labor = labor_amount(ym)
+        labor = 0.0
+        if not sdf.empty:
+            labor = float(sdf.loc[sdf["month"].eq(ym), "total_amount"].sum())
+        # designer_salaries만 사용 (transactions 급여 카테고리는 제외)
         fixed_total = float(fixed_other)   # ✅ 인건비 제외
 
         # 재료비/마케팅/세금/사업자배당
