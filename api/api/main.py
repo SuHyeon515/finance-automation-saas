@@ -2219,15 +2219,20 @@ async def financial_diagnosis(
         mkt_ratio = pct(abs(marketing), monthly_sales)
 
         # ✅ 영업이익 (사업자배당 제외)
-        op_profit_est = monthly_sales - (abs(fixed_total) + abs(materials) + abs(marketing) + abs(tax_amt))
+        # 총입금액 - 고정비 - 변동지출(재료비, 마케팅, 세금)
+        op_profit_est = monthly_sales - (
+            abs(fixed_total) + abs(materials) + abs(marketing) + abs(tax_amt)
+        )
 
         # ✅ 순이익 (사업자배당 포함)
-        net_profit_est = monthly_sales - (abs(fixed_total) + abs(materials) + abs(marketing) + abs(tax_amt) + abs(owner_div))
+        # 총입금액 - (고정비 + 변동지출 + 사업자배당)
+        net_profit_est = monthly_sales - (
+            abs(fixed_total) + abs(materials) + abs(marketing) + abs(tax_amt) + abs(owner_div)
+        )
 
-        # 비율 계산
+        # ✅ 비율 계산
         op_margin_est = pct(op_profit_est, monthly_sales)
         net_margin_est = pct(net_profit_est, monthly_sales)
-
         # 현금/자산/부채 스냅샷(기간의 마지막 달 기준에서만 의미있음)
         # 월별 결과에도 같이 넣어두고, 최종 요약은 end_month로 산출
         cash_hold = latest_bank_balance(ym)
