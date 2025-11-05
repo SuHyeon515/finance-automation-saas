@@ -2218,9 +2218,15 @@ async def financial_diagnosis(
         material_ratio = pct(abs(materials), monthly_sales)
         mkt_ratio = pct(abs(marketing), monthly_sales)
 
-        # 단순 영업이익/율
-        op_profit_est = monthly_sales - (abs(fixed_total) + abs(materials) + abs(marketing))
+        # ✅ 영업이익 (사업자배당 제외)
+        op_profit_est = monthly_sales - (abs(fixed_total) + abs(materials) + abs(marketing) + abs(tax_amt))
+
+        # ✅ 순이익 (사업자배당 포함)
+        net_profit_est = monthly_sales - (abs(fixed_total) + abs(materials) + abs(marketing) + abs(tax_amt) + abs(owner_div))
+
+        # 비율 계산
         op_margin_est = pct(op_profit_est, monthly_sales)
+        net_margin_est = pct(net_profit_est, monthly_sales)
 
         # 현금/자산/부채 스냅샷(기간의 마지막 달 기준에서만 의미있음)
         # 월별 결과에도 같이 넣어두고, 최종 요약은 end_month로 산출
@@ -2273,22 +2279,54 @@ async def financial_diagnosis(
         else:                  grade = "E"
 
         results.append(dict(
-            month=ym,
-            monthly_sales=monthly_sales,
-            visitors=visitors,
-            returning_visitors=returning,
-            unit_sales=unit_sales,
-            revisit_rate=revisit_rate,
-            pass_paid=pass_paid, pass_used=pass_used, pass_balance=pass_bal,
-            pass_ratio=pass_ratio,
-            fixed_other=fixed_other, labor=labor, fixed_total=fixed_total,
-            material=materials, marketing=marketing, tax=tax_amt, owner_dividend=owner_div,
-            fixed_ratio=fixed_ratio, labor_ratio=labor_ratio, material_ratio=material_ratio, mkt_ratio=mkt_ratio,
-            op_profit_est=op_profit_est, op_margin_est=op_margin_est,
-            work_days=work_days,
-            cash_hold=cash_hold, fixed_deposit=fixed_deposit, total_assets=total_assets, total_debt=total_debt,
-            evals=evals, avg_score=avg_score, grade=grade
-        ))
+                month=ym,
+                monthly_sales=monthly_sales,
+                visitors=visitors,
+                returning_visitors=returning,
+                unit_sales=unit_sales,
+                revisit_rate=revisit_rate,
+
+                # 💳 정액권 관련
+                pass_paid=pass_paid,
+                pass_used=pass_used,
+                pass_balance=pass_bal,
+                pass_ratio=pass_ratio,
+
+                # 💸 비용 구조
+                fixed_other=fixed_other,
+                labor=labor,
+                fixed_total=fixed_total,
+                material=materials,
+                marketing=marketing,
+                tax=tax_amt,
+                owner_dividend=owner_div,
+
+                # 📊 비율 구조
+                fixed_ratio=fixed_ratio,
+                labor_ratio=labor_ratio,
+                material_ratio=material_ratio,
+                mkt_ratio=mkt_ratio,
+
+                # 💰 이익 계산 (신규 추가)
+                op_profit_est=op_profit_est,      # 영업이익
+                op_margin_est=op_margin_est,      # 영업이익률
+                net_profit_est=net_profit_est,    # 순이익 (사업자배당 포함)
+                net_margin_est=net_margin_est,    # 순이익률 (사업자배당 포함)
+
+                # 📅 운영 정보
+                work_days=work_days,
+
+                # 🏦 자산·부채
+                cash_hold=cash_hold,
+                fixed_deposit=fixed_deposit,
+                total_assets=total_assets,
+                total_debt=total_debt,
+
+                # 🧮 평가
+                evals=evals,
+                avg_score=avg_score,
+                grade=grade
+            ))
 
     # ===== 6) 최종 요약(기간 마지막 달 기준의 현금/자산/부채/현금유보/부채비율) =====
     last = results[-1]
