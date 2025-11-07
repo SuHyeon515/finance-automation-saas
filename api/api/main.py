@@ -2202,11 +2202,11 @@ async def financial_diagnosis(
         fixed_total = float(fixed_other)   # ✅ 인건비 제외
 
         # 재료비/마케팅/세금/사업자배당
-        materials = sum_tx(ym, lambda t: t["category"] == MATERIAL_CAT)
-        marketing = sum_tx(ym, lambda t: t["category"] == MARKETING_CAT)
-        tax_amt   = sum_tx(ym, lambda t: t["category"] == TAX_CAT)
-        owner_div = sum_tx(ym, lambda t: t["category"] == OWNER_DIVIDEND)
-
+        materials = sum_tx(ym, lambda df: df["category"] == MATERIAL_CAT)
+        marketing = sum_tx(ym, lambda df: df["category"] == MARKETING_CAT)
+        tax_amt   = sum_tx(ym, lambda df: df["category"] == TAX_CAT)
+        owner_div = sum_tx(ym, lambda df: df["category"] == OWNER_DIVIDEND)
+        print(f"[DEBUG] {ym} 재료비 합계={materials:,} / 비율={material_ratio}")
         # 비율 계산 (0 division 방지)
         def pct(a, b):
             return float(a / b * 100.0) if b and b != 0 else None
@@ -2465,16 +2465,17 @@ async def financial_diagnosis(
             "user_id": user_id,
             "branch": branch,
             "title": f"{branch} 재무건전성 진단 ({start_month}~{end_month})",
-            "content": str(analysis_text)[:1000],  # 너무 길면 자르기 (디버그용)
+            "content": str(analysis_text)[:1000],  # 너무 길면 자르기
             "grade": final_grade,
             "cash_buffer_ratio": cash_buffer_ratio,
             "debt_ratio": debt_ratio,
             "period_start": start_month,
             "period_end": end_month,
-            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            "created_at": datetime.utcnow().isoformat(),  # ✅ isoformat으로 변경
         }
+
         res = supabase.table("analyses").insert(record).execute()
-        print("✅ analyses 테이블 저장 완료:", res)
+        print("🧾 [analyses insert 결과] =", res)
     except Exception as e:
         import traceback
         print("⚠️ analyses 저장 실패:", e)
