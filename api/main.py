@@ -2202,10 +2202,10 @@ async def financial_diagnosis(
         fixed_total = float(fixed_other)   # ✅ 인건비 제외
 
         # 재료비/마케팅/세금/사업자배당
-        materials = sum_tx(ym, lambda t: t["category"].eq(MATERIAL_CAT))
-        marketing = sum_tx(ym, lambda t: t["category"].eq(MARKETING_CAT))
-        tax_amt = sum_tx(ym, lambda t: t["category"].eq(TAX_CAT))
-        owner_div = sum_tx(ym, lambda t: t["category"].eq(OWNER_DIVIDEND))
+        materials = sum_tx(ym, lambda t: t["category"] == MATERIAL_CAT)
+        marketing = sum_tx(ym, lambda t: t["category"] == MARKETING_CAT)
+        tax_amt   = sum_tx(ym, lambda t: t["category"] == TAX_CAT)
+        owner_div = sum_tx(ym, lambda t: t["category"] == OWNER_DIVIDEND)
 
         # 비율 계산 (0 division 방지)
         def pct(a, b):
@@ -2461,21 +2461,24 @@ async def financial_diagnosis(
 
     # ✅ GPT 분석 결과 저장 (analyses 테이블)
     try:
-        supabase.table("analyses").insert({
+        record = {
             "user_id": user_id,
             "branch": branch,
             "title": f"{branch} 재무건전성 진단 ({start_month}~{end_month})",
-            "content": analysis_text,
+            "content": str(analysis_text)[:1000],  # 너무 길면 자르기 (디버그용)
             "grade": final_grade,
             "cash_buffer_ratio": cash_buffer_ratio,
             "debt_ratio": debt_ratio,
             "period_start": start_month,
             "period_end": end_month,
-            "created_at": datetime.now().isoformat()
-        }).execute()
-        print("✅ analyses 테이블 저장 완료")
+            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        res = supabase.table("analyses").insert(record).execute()
+        print("✅ analyses 테이블 저장 완료:", res)
     except Exception as e:
+        import traceback
         print("⚠️ analyses 저장 실패:", e)
+        traceback.print_exc()
 
     return {
         "branch": branch,
