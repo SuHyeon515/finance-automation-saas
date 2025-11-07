@@ -2206,7 +2206,7 @@ async def financial_diagnosis(
         marketing = sum_tx(ym, lambda df: df["category"] == MARKETING_CAT)
         tax_amt   = sum_tx(ym, lambda df: df["category"] == TAX_CAT)
         owner_div = sum_tx(ym, lambda df: df["category"] == OWNER_DIVIDEND)
-        print(f"[DEBUG] {ym} 재료비 합계={materials:,} / 비율={material_ratio}")
+        
         # 비율 계산 (0 division 방지)
         def pct(a, b):
             return float(a / b * 100.0) if b and b != 0 else None
@@ -2219,6 +2219,8 @@ async def financial_diagnosis(
         labor_ratio = pct(abs(labor), monthly_sales)
         material_ratio = pct(abs(materials), monthly_sales)
         mkt_ratio = pct(abs(marketing), monthly_sales)
+
+        print(f"[DEBUG] {ym} 재료비 합계={materials:,} / 비율={material_ratio}")
 
         # ✅ 영업이익 (사업자배당 제외)
         op_profit_est = monthly_sales - (
