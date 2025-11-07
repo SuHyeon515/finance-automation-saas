@@ -16,6 +16,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from urllib.parse import quote
 from pydantic import BaseModel, field_validator
+import math
 import re
 import jwt
 import requests
@@ -2339,9 +2340,18 @@ async def financial_diagnosis(
                 avg_score=avg_score,
                 grade=grade
             ))
-
-    # ===== 6) 최종 요약(기간 마지막 달 기준의 현금/자산/부채/현금유보/부채비율) =====
+    # ===== 5-2) 기간 평균 및 변화 계산 =====
+    first = results[0]
     last = results[-1]
+
+    avg_sales = np.mean([r["monthly_sales"] for r in results])
+    avg_op_margin = np.mean([r["op_margin_est"] for r in results if r["op_margin_est"] is not None])
+    avg_revisit = np.mean([r["revisit_rate"] for r in results if r["revisit_rate"] is not None])
+    avg_fixed_ratio = np.mean([r["fixed_ratio"] for r in results if r["fixed_ratio"] is not None])
+
+    change_sales = last["monthly_sales"] - first["monthly_sales"]
+    change_op_margin = (last["op_margin_est"] or 0) - (first["op_margin_est"] or 0)
+
     # 3개월 필요현금 = 고정비(마지막달) × 3
     need_3m_cash = abs(last["fixed_total"]) * 3.0
     cash_buffer_ratio = float((last["cash_hold"] / need_3m_cash * 100.0)) if (last["cash_hold"] is not None and need_3m_cash) else None
@@ -2363,7 +2373,7 @@ async def financial_diagnosis(
     def fmt_money(x): 
         return f"₩{x:,.0f}" if x is not None else "데이터 부족"
     def fmt_pct(x):
-        return f"{x:.1f}%" if x is not None else "데이터 부족"
+        return f"{x:.1f}%" if x is not None and not math.isnan(x) else "데이터 부족"
     def fmt_int(x):
         return f"{int(x)}" if x is not None else "데이터 부족"
 
@@ -2408,6 +2418,14 @@ async def financial_diagnosis(
 지점명: {branch}
 기간: {start_month} ~ {end_month}
 
+[기간 전체 요약 통계]
+평균 월매출: {fmt_money(avg_sales)}  
+평균 영업이익률: {fmt_pct(avg_op_margin)}  
+평균 재방문율: {fmt_pct(avg_revisit)}  
+평균 고정비비율: {fmt_pct(avg_fixed_ratio)}  
+매출 증감 (첫 달 → 마지막 달): {fmt_money(change_sales)}  
+영업이익률 증감: {fmt_pct(change_op_margin)}
+
 [핵심 요약 수치 (마지막 달 기준)]
 월매출: {fmt_money(last['monthly_sales'])}
 총객수: {fmt_int(last['visitors'])}명 / 재방문: {fmt_int(last['returning_visitors'])}명
@@ -2445,7 +2463,10 @@ async def financial_diagnosis(
    - 등급: A/B/C/D/E 중 하나 (기간 평균점수 기반, 현재 계산값: {final_grade})
    - 이유: 2~3줄로 숫자 포함
 4. 개선 액션 제안 (최대 5개, 한 줄씩. 무엇을/얼마나/언제까지)
-
+[추가 지시]
+- 위 월별 데이터를 모두 참고하여, 마지막 달만이 아니라 전체 기간(예: 2025-04~2025-09)의 추세를 함께 분석하라.
+- 특히 매출, 재방문율, 영업이익률의 변화 방향을 근거로 “총평” 단락을 추가하라.
+- 총평은 마지막에 따로 1문단으로 작성하라. ("종합적으로 볼 때..." 로 시작)
 한줄 요약으로는 다음 문장을 참고하되 과장 없이 간단히 정리하라:
 - "{one_liner}"
 """
