@@ -2266,7 +2266,12 @@ async def financial_diagnosis(
             "정액권비중":   lambda: ("좋음" if pass_ratio is not None and 20 <= pass_ratio <= 30 else ("보통" if pass_ratio is not None and 30 < pass_ratio <= 40 else ("위험" if pass_ratio is not None and pass_ratio > 40 else "데이터 부족"))),
             "고정비비율":   lambda: eval3(fixed_ratio, dict(lo=60, mid=75, hi=60, mode="lower_better")),
             "인건비비율":   lambda: ("좋음" if labor_ratio is not None and 35 <= labor_ratio <= 45 else ("보통" if labor_ratio is not None and 45 < labor_ratio < 50 else ("위험" if labor_ratio is not None and labor_ratio >= 50 else "데이터 부족"))),
-            "재료비비율":   lambda: ("좋음" if material_ratio is not None and 10 <= material_ratio <= 15 else ("보통" if material_ratio is not None and 15 < material_ratio < 20 else ("위험" if material_ratio is not None and material_ratio >= 20 else "데이터 부족"))),
+            "재료비비율": lambda: (
+                    "좋음" if material_ratio is not None and 10 <= material_ratio <= 15 else
+                    ("보통" if material_ratio is not None and 15 < material_ratio < 20 else
+                    ("위험" if material_ratio is not None and material_ratio >= 20 else
+                    ("위험" if material_ratio is not None else "데이터 부족")))
+                ),
             "영업이익률":   lambda: ("좋음" if op_margin_est is not None and op_margin_est >= 10 else ("보통" if op_margin_est is not None and 5 <= op_margin_est < 10 else ("위험" if op_margin_est is not None and op_margin_est < 5 else "데이터 부족"))),
             "고객회전율":   lambda: ("좋음" if (visitors and work_days and visitors/work_days >= 8) else ("보통" if (visitors and work_days and 5 <= visitors/work_days < 8) else ("위험" if (visitors and work_days and visitors/work_days < 5) else "데이터 부족"))),
         }
